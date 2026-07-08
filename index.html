@@ -37136,7 +37136,7 @@ document.addEventListener('click', function(e){
   const LOCAL_PENDING_PROGRESS_SYNC_KEY = "aiGamePlatformPendingProgressSync";
   const MAX_PROGRESS_MESSAGE_SIZE = 50000;
   const OWNER_ACCOUNT_KEYS = ["vortex", "guinea"];
-  const FRIEND_PLAY_GAME_IDS = ["chess", "checkers", "mancala", "battleship", "connect-4"];
+  const FRIEND_PLAY_GAME_IDS = ["chess", "checkers", "mancala", "battleship", "connect-4", "volley-pork"];
   const HOME_MUSIC_SRC = "";
   const HOME_MUSIC_VOLUME = 0.52;
   // Paste your Supabase Project URL and publishable public key here after running SUPABASE-SETUP.sql.
@@ -38233,7 +38233,7 @@ document.addEventListener('click', function(e){
       return;
     }
     if (!isFriendPlayGame(gameId)) {
-      state.friendPlayError = "Friend play is only for Chess, Checkers, Mancala, Battleship, and Connect 4.";
+      state.friendPlayError = "Friend play is only for Chess, Checkers, Mancala, Battleship, Connect 4, and Volley Pork.";
       state.friendPlayMessage = "";
       renderAuthModal();
       return;
