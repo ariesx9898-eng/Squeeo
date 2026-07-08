@@ -1033,6 +1033,14 @@ a {
   font-weight: 850;
 }
 
+.friend-play-session .friend-play-actions {
+  justify-content: flex-end;
+}
+
+.friend-play-session .friend-play-status {
+  grid-column: 1 / -1;
+}
+
 .friend-play-popups {
   position: fixed;
   right: 18px;
@@ -37363,6 +37371,7 @@ document.addEventListener('click', function(e){
     friendPlayMessage: "",
     activeFriendGameSession: null,
     activeFriendGameMoveIds: new Set(),
+    activeFriendGameRoundKey: "",
     friendPlayIframe: null,
     globalChatMessage: "",
     globalChatError: "",
@@ -37414,6 +37423,20 @@ document.addEventListener('click', function(e){
       day: "numeric",
       hour: "numeric",
       minute: "2-digit"
+    });
+  }
+
+  function formatExactDateTime(value) {
+    if (!value) return "Not available";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "Not available";
+    return date.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit"
     });
   }
 
@@ -38018,6 +38041,7 @@ document.addEventListener('click', function(e){
       if (!state.activeFriendGameSession || state.activeFriendGameSession.id !== session.id) {
         state.activeFriendGameSession = session;
         state.activeFriendGameMoveIds = new Set();
+        state.activeFriendGameRoundKey = "";
       } else {
         state.activeFriendGameSession = session;
       }
@@ -38027,6 +38051,7 @@ document.addEventListener('click', function(e){
     if (state.activeFriendGameSession?.id === sessionId) {
       state.activeFriendGameSession = null;
       state.activeFriendGameMoveIds = new Set();
+      state.activeFriendGameRoundKey = "";
     }
     return null;
   }
@@ -38136,7 +38161,10 @@ document.addEventListener('click', function(e){
   async function refreshFriendGameMoves(sessionId = state.activeFriendGameSession?.id, shouldApply = true) {
     if (!sessionId) return;
     if (!isSupabaseConfigured()) {
-      if (shouldApply) applyPendingFriendGameMoves();
+      if (shouldApply) {
+        applyPendingFriendGameMoves();
+        processFriendPlayAgainState();
+      }
       return;
     }
     try {
@@ -38146,7 +38174,10 @@ document.addEventListener('click', function(e){
       const otherMoves = state.globalFriendGameMoves.filter((move) => move.sessionId !== sessionId);
       const sessionMoves = (Array.isArray(rows) ? rows : []).map(normalizeFriendGameMove).filter(Boolean);
       state.globalFriendGameMoves = [...otherMoves, ...sessionMoves].slice(-2000);
-      if (shouldApply) applyPendingFriendGameMoves();
+      if (shouldApply) {
+        applyPendingFriendGameMoves();
+        processFriendPlayAgainState();
+      }
     } catch {
       state.friendPlayError = "Could not sync friend game moves yet.";
     }
@@ -38405,6 +38436,7 @@ document.addEventListener('click', function(e){
     if (state.activeFriendGameSession?.id === activeSessionId) {
       state.activeFriendGameSession = null;
       state.activeFriendGameMoveIds = new Set();
+      state.activeFriendGameRoundKey = "";
       rememberActiveFriendGame("");
       configureFriendPlayFrame();
     }
@@ -38432,6 +38464,7 @@ document.addEventListener('click', function(e){
     }
     if (state.activeFriendGameSession?.id !== session.id) {
       state.activeFriendGameMoveIds = new Set();
+      state.activeFriendGameRoundKey = "";
     }
     state.activeFriendGameSession = session;
     state.friendPlayGameId = session.gameId;
@@ -38448,10 +38481,150 @@ document.addEventListener('click', function(e){
   function leaveFriendGameSession() {
     state.activeFriendGameSession = null;
     state.activeFriendGameMoveIds = new Set();
+    state.activeFriendGameRoundKey = "";
     rememberActiveFriendGame("");
     configureFriendPlayFrame();
     render();
     renderFriendPlayPopups();
+  }
+
+  function friendGameMovesForSession(sessionId = state.activeFriendGameSession?.id) {
+    if (!sessionId) return [];
+    return readFriendGameMoves().moves
+      .filter((move) => move.sessionId === sessionId)
+      .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+  }
+
+  function friendPlayRoundInfo(session = state.activeFriendGameSession, moves = friendGameMovesForSession(session?.id)) {
+    const baseRoundKey = session ? `${session.id}:round-0` : "round-0";
+    const resets = moves.filter((move) => move.eventPayload?.kind === "play-again-reset");
+    const latestReset = resets[resets.length - 1] || null;
+    return {
+      roundKey: String(latestReset?.eventPayload?.nextRoundKey || baseRoundKey),
+      latestReset
+    };
+  }
+
+  function friendPlayAgainStatus(session = state.activeFriendGameSession) {
+    const identity = requestIdentity();
+    if (!session || !identity) {
+      return { ownVoted: false, opponentVoted: false, bothVoted: false, statusText: "" };
+    }
+    const moves = friendGameMovesForSession(session.id);
+    const { roundKey } = friendPlayRoundInfo(session, moves);
+    const votes = new Set(
+      moves
+        .filter((move) => move.eventPayload?.kind === "play-again-vote" && move.eventPayload?.roundKey === roundKey)
+        .map((move) => move.playerKey)
+    );
+    const opponent = friendGameOpponent(session);
+    const ownVoted = votes.has(identity.key);
+    const opponentVoted = Boolean(opponent?.key && votes.has(opponent.key));
+    const bothVoted = ownVoted && opponentVoted;
+    const hasReset = moves.some((move) => (
+      move.eventPayload?.kind === "play-again-reset"
+      && move.eventPayload?.roundKey === roundKey
+    ));
+    const statusText = bothVoted
+      ? "Both players are ready. Restarting..."
+      : ownVoted
+        ? "Waiting for your friend to press Play Again."
+        : opponentVoted
+          ? "Your friend wants to play again."
+          : "When the match ends, both players can press Play Again.";
+    return { roundKey, ownVoted, opponentVoted, bothVoted, hasReset, statusText };
+  }
+
+  async function saveFriendGameSystemEvent(eventPayload, failureMessage = "Could not save that friend game update.") {
+    const identity = requestIdentity();
+    const session = state.activeFriendGameSession;
+    if (!identity || !session || !eventPayload || typeof eventPayload !== "object") return null;
+    const payload = {
+      id: `friend-move-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      session_id: session.id,
+      player_key: identity.key,
+      player_username: identity.username,
+      event_payload: eventPayload,
+      created_at: new Date().toISOString()
+    };
+    const move = addFriendGameMove(payload);
+    if (move) state.activeFriendGameMoveIds.add(move.id);
+    if (isSupabaseConfigured()) {
+      try {
+        await supabaseFetch("friend_game_moves", {
+          method: "POST",
+          body: payload,
+          prefer: "return=representation"
+        });
+      } catch {
+        state.friendPlayError = failureMessage;
+      }
+    }
+    return move;
+  }
+
+  async function saveFriendPlayAgainReset(session, roundKey) {
+    await saveFriendGameSystemEvent({
+      kind: "play-again-reset",
+      gameId: session.gameId,
+      roundKey,
+      nextRoundKey: `${session.id}:round-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      at: Date.now()
+    }, "Could not restart the friend game.");
+    processFriendPlayAgainState();
+  }
+
+  function restartFriendPlayFrame() {
+    const iframe = state.friendPlayIframe;
+    const game = state.currentGameSession?.game;
+    const session = state.activeFriendGameSession;
+    if (!iframe || !game || !session || session.gameId !== game.id) return;
+    iframe.srcdoc = window.__gameHTML(game.id);
+  }
+
+  function refreshFriendPlaySessionUi() {
+    const game = state.currentGameSession?.game;
+    const sessionEl = document.querySelector(".friend-play-session");
+    if (!game || !sessionEl) return;
+    sessionEl.outerHTML = friendPlaySessionHtml(game);
+  }
+
+  function processFriendPlayAgainState() {
+    const session = state.activeFriendGameSession;
+    const identity = requestIdentity();
+    if (!session || !identity) return;
+    const moves = friendGameMovesForSession(session.id);
+    const info = friendPlayRoundInfo(session, moves);
+    if (!state.activeFriendGameRoundKey) {
+      state.activeFriendGameRoundKey = info.roundKey;
+    } else if (state.activeFriendGameRoundKey !== info.roundKey) {
+      state.activeFriendGameRoundKey = info.roundKey;
+      state.activeFriendGameMoveIds = new Set(moves.map((move) => move.id));
+      restartFriendPlayFrame();
+      refreshFriendPlaySessionUi();
+      return;
+    }
+    const status = friendPlayAgainStatus(session);
+    if (status.bothVoted && !status.hasReset && identity.key === session.hostKey) {
+      saveFriendPlayAgainReset(session, status.roundKey).catch(() => {});
+    }
+    refreshFriendPlaySessionUi();
+  }
+
+  async function handleFriendPlayAgain() {
+    const session = state.activeFriendGameSession;
+    const identity = requestIdentity();
+    if (!session || !identity) return;
+    const status = friendPlayAgainStatus(session);
+    if (status.ownVoted) return;
+    await saveFriendGameSystemEvent({
+      kind: "play-again-vote",
+      gameId: session.gameId,
+      roundKey: status.roundKey,
+      at: Date.now()
+    }, "Could not save your Play Again vote.");
+    processFriendPlayAgainState();
+    refreshFriendPlaySessionUi();
   }
 
   async function saveFriendGameMove(input) {
@@ -38473,6 +38646,10 @@ document.addEventListener('click', function(e){
     };
     if (input.target) eventPayload.target = String(input.target).slice(0, 40);
     if (input.label) eventPayload.label = String(input.label).slice(0, 60);
+    if (input.code) eventPayload.code = String(input.code).slice(0, 40);
+    if (input.sideKey) eventPayload.sideKey = String(input.sideKey).slice(0, 10);
+    if (typeof input.down === "boolean") eventPayload.down = input.down;
+    if (typeof input.repeat === "boolean") eventPayload.repeat = input.repeat;
     if (Number.isInteger(Number(input.pitIndex))) eventPayload.pitIndex = Number(input.pitIndex);
     if (Number.isInteger(Number(input.row))) eventPayload.row = Number(input.row);
     if (Number.isInteger(Number(input.col))) eventPayload.col = Number(input.col);
@@ -38539,11 +38716,15 @@ document.addEventListener('click', function(e){
       .filter((move) => move.sessionId === session.id)
       .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
       .forEach((move) => {
+        if (state.activeFriendGameMoveIds.has(move.id)) return;
+        if (move.eventPayload?.kind === "play-again-vote" || move.eventPayload?.kind === "play-again-reset") {
+          state.activeFriendGameMoveIds.add(move.id);
+          return;
+        }
         if (identity && move.playerKey === identity.key) {
           state.activeFriendGameMoveIds.add(move.id);
           return;
         }
-        if (state.activeFriendGameMoveIds.has(move.id)) return;
         state.activeFriendGameMoveIds.add(move.id);
         iframe.contentWindow.postMessage({
           type: "ai-platform-friend-play-remote-input",
@@ -38577,7 +38758,7 @@ document.addEventListener('click', function(e){
         ${incoming.map((request) => `
           <article class="friend-play-popup">
             <strong>${ownerUsernameHtml(request.requesterUsername)} wants to play ${escapeHtml(request.gameTitle)}</strong>
-            <p>Accept to open the same game board together.</p>
+            <p>Requested ${escapeHtml(formatExactDateTime(request.createdAt))}</p>
             <div class="friend-play-actions">
               <button class="button primary" type="button" data-friend-play-action="accepted" data-friend-play-id="${escapeHtml(request.id)}">Accept</button>
               <button class="button secondary" type="button" data-friend-play-action="declined" data-friend-play-id="${escapeHtml(request.id)}">Decline</button>
@@ -38589,7 +38770,8 @@ document.addEventListener('click', function(e){
           return `
             <article class="friend-play-popup">
               <strong>${ownerUsernameHtml(otherName)} accepted ${escapeHtml(request.gameTitle)}</strong>
-              <p>Join the shared board when you are ready.</p>
+              <p>Accepted ${escapeHtml(formatExactDateTime(request.respondedAt || session.updatedAt || request.createdAt))}</p>
+              <p>Started ${escapeHtml(formatExactDateTime(session.createdAt))}</p>
               <div class="friend-play-actions">
                 <button class="button primary" type="button" data-friend-play-join="${escapeHtml(session.id)}">Join Game</button>
                 <button class="button secondary" type="button" data-friend-play-cancel="${escapeHtml(session.id)}" data-friend-play-request-id="${escapeHtml(request.id)}">Decline Request</button>
@@ -39856,6 +40038,8 @@ document.addEventListener('click', function(e){
                   <div class="friend-request-meta">
                     <strong>${escapeHtml(session.gameTitle)}</strong>
                     <small>With ${ownerUsernameHtml(opponent?.username || "Friend")} | ${escapeHtml(friendPlayRole(session))}</small>
+                    <small>Started ${escapeHtml(formatExactDateTime(session.createdAt))}</small>
+                    <small>Updated ${escapeHtml(formatExactDateTime(session.updatedAt || session.createdAt))}</small>
                   </div>
                   <button class="friend-add-button" type="button" data-friend-play-join="${escapeHtml(session.id)}">Join Game</button>
                 </article>
@@ -39871,13 +40055,21 @@ document.addEventListener('click', function(e){
     const session = state.activeFriendGameSession;
     if (!session || session.status !== "active" || session.gameId !== game.id) return "";
     const opponent = friendGameOpponent(session);
+    const rematch = friendPlayAgainStatus(session);
     return `
       <div class="friend-play-session" role="status">
         <div>
           <strong>Playing with ${ownerUsernameHtml(opponent?.username || "Friend")}</strong>
           <span>${escapeHtml(friendPlayRole(session))} | ${escapeHtml(session.gameTitle)}</span>
+          <span>Started ${escapeHtml(formatExactDateTime(session.createdAt))} | Updated ${escapeHtml(formatExactDateTime(session.updatedAt || session.createdAt))}</span>
         </div>
-        <button class="button secondary" type="button" data-friend-play-leave>Leave</button>
+        <div class="friend-play-actions">
+          <button class="button primary" type="button" data-friend-play-again ${rematch.ownVoted ? "disabled" : ""}>
+            ${rematch.ownVoted ? "Ready" : "Play Again"}
+          </button>
+          <button class="button secondary" type="button" data-friend-play-leave>Leave</button>
+        </div>
+        <small class="friend-play-status">${escapeHtml(rematch.statusText)}</small>
       </div>
     `;
   }
@@ -41420,6 +41612,7 @@ document.addEventListener('click', function(e){
     state.activeFriendKey = "";
     state.activeFriendGameSession = null;
     state.activeFriendGameMoveIds = new Set();
+    state.activeFriendGameRoundKey = "";
     rememberActiveFriendGame("");
     state.globalChatPeerKey = "";
     updateAuthUI();
@@ -41876,6 +42069,12 @@ document.addEventListener('click', function(e){
     if (leaveButton) {
       event.preventDefault();
       leaveFriendGameSession();
+      return;
+    }
+    const playAgainButton = event.target?.closest?.("[data-friend-play-again]");
+    if (playAgainButton) {
+      event.preventDefault();
+      handleFriendPlayAgain().catch(() => {});
     }
   });
 
