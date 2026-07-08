@@ -35682,6 +35682,40 @@ button {
   const P2_MOVE_KEYS = ["ArrowLeft", "ArrowRight", "ArrowUp"];
   const P1_FRIEND_KEYS = new Set([...P1_MOVE_KEYS, ...Object.keys(KEY_BINDINGS)]);
   const P2_FRIEND_KEYS = new Set([...P2_MOVE_KEYS, ...Object.keys(PLAYER_TWO_ACTIONS)]);
+  const P2_SAME_CONTROL_CODES = {
+    KeyA: "ArrowLeft",
+    KeyD: "ArrowRight",
+    KeyW: "ArrowUp",
+    Digit1: "KeyU",
+    Space: "KeyU",
+    KeyJ: "KeyU",
+    Digit2: "KeyI",
+    KeyZ: "KeyI",
+    KeyK: "KeyI",
+    Digit3: "KeyO",
+    KeyC: "KeyO",
+    Digit4: "KeyP",
+    KeyX: "KeyP",
+    KeyS: "KeyP",
+    KeyL: "KeyP",
+    KeyR: "ShiftRight",
+    KeyE: "KeyU",
+    KeyF: "KeyU",
+    KeyV: "KeyI"
+  };
+  const P2_NUMBER_ACTIONS = {
+    Digit1: "hit",
+    Digit2: "block",
+    Digit3: "dribble",
+    Digit4: "smash"
+  };
+  const FRIEND_KEY_TO_CODE = {
+    "1": "Digit1",
+    "2": "Digit2",
+    "3": "Digit3",
+    "4": "Digit4",
+    " ": "Space"
+  };
   const friendVolley = {
     enabled: false,
     sideKey: "p1",
@@ -36122,24 +36156,49 @@ button {
     return "";
   }
 
+  function friendVolleyCanonicalCode(code, side = friendVolleyOwnSide()) {
+    if (friendVolley.enabled && side === "p2" && P1_FRIEND_KEYS.has(code)) {
+      return P2_SAME_CONTROL_CODES[code] || code;
+    }
+    return code;
+  }
+
+  function friendVolleyEventCode(event) {
+    return event.code || FRIEND_KEY_TO_CODE[event.key] || "";
+  }
+
+  function friendVolleyActionForCode(code, side = friendVolleyOwnSide()) {
+    if (friendVolley.enabled && side === "p2" && P2_NUMBER_ACTIONS[code]) return P2_NUMBER_ACTIONS[code];
+    if (friendVolley.enabled && side === "p2" && KEY_BINDINGS[code]) return KEY_BINDINGS[code];
+    if (side === "p2") return PLAYER_TWO_ACTIONS[code] || "";
+    return KEY_BINDINGS[code] || "";
+  }
+
   function volleyKeyDown(code, side) {
     return keys.has(code) || (friendVolley.enabled && friendVolley.remoteKeys.has(`${side}:${code}`));
   }
 
   function localFriendVolleyKey(event, down) {
-    const sideKey = friendVolleySideForCode(event.code);
+    const ownSide = friendVolleyOwnSide();
+    const eventCode = friendVolleyEventCode(event);
+    const code = friendVolleyCanonicalCode(eventCode, ownSide);
+    const sideKey = friendVolleySideForCode(code);
     if (!sideKey) return { ignore: true };
-    if (sideKey !== friendVolleyOwnSide()) return { blocked: true };
-    return {
+    if (sideKey !== ownSide) return { blocked: true };
+    const action = friendVolleyActionForCode(eventCode, ownSide) || friendVolleyActionForCode(code, ownSide);
+    const payload = {
       kind: "volley-pork-key",
       gameId: "volley-pork",
-      code: event.code,
+      code,
       sideKey,
       down: Boolean(down),
       repeat: Boolean(event.repeat),
       seq: ++friendVolley.seq,
       at: Date.now()
     };
+    if (code !== eventCode) payload.originalCode = eventCode;
+    if (action) payload.action = action;
+    return payload;
   }
 
   function friendVolleyNumber(value, fallback) {
@@ -36285,12 +36344,15 @@ button {
     if (sideKey === friendVolleyOwnSide()) return true;
     const code = String(input.code || "");
     if (friendVolleySideForCode(code) !== sideKey) return false;
+    const action = typeof input.action === "string"
+      ? input.action
+      : sideKey === "p2" ? PLAYER_TWO_ACTIONS[code] : KEY_BINDINGS[code];
     const remoteKey = `${sideKey}:${code}`;
     if (input.down) {
       friendVolley.remoteKeys.add(remoteKey);
       if (!input.repeat) {
-        if (sideKey === "p1" && KEY_BINDINGS[code]) triggerPlayerAction(KEY_BINDINGS[code]);
-        if (sideKey === "p2" && PLAYER_TWO_ACTIONS[code]) triggerPlayerTwoAction(PLAYER_TWO_ACTIONS[code]);
+        if (sideKey === "p1" && action) triggerPlayerAction(action);
+        if (sideKey === "p2" && action) triggerAction(rival, action, false);
       }
     } else {
       friendVolley.remoteKeys.delete(remoteKey);
@@ -37191,32 +37253,49 @@ button {
 
   window.addEventListener("keydown", (event) => {
     const movementKeys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "KeyA", "KeyD", "KeyW", ...Object.keys(KEY_BINDINGS), ...Object.keys(PLAYER_TWO_ACTIONS)];
-    if (movementKeys.includes(event.code)) event.preventDefault();
+    const ownSide = friendVolleyOwnSide();
+    const eventCode = friendVolleyEventCode(event);
+    const code = friendVolley.enabled ? friendVolleyCanonicalCode(eventCode, ownSide) : eventCode;
+    if (movementKeys.includes(eventCode) || movementKeys.includes(code)) event.preventDefault();
     if (friendVolley.enabled) {
-      const sideKey = friendVolleySideForCode(event.code);
-      if (sideKey && sideKey !== friendVolleyOwnSide()) {
+      const sideKey = friendVolleySideForCode(code);
+      if (sideKey && sideKey !== ownSide) {
         event.preventDefault();
         event.stopPropagation();
         return;
       }
+      keys.add(code);
+      if (!event.repeat) {
+        const action = friendVolleyActionForCode(eventCode, ownSide) || friendVolleyActionForCode(code, ownSide);
+        if (action) {
+          if (ownSide === "p2") triggerAction(rival, action, false);
+          else triggerPlayerAction(action);
+        }
+      }
+      unlockAudio();
+      return;
     }
-    keys.add(event.code);
+    keys.add(code);
     if (event.repeat) return;
-    if (state.mode === "two" && PLAYER_TWO_ACTIONS[event.code]) triggerPlayerTwoAction(PLAYER_TWO_ACTIONS[event.code]);
-    if (KEY_BINDINGS[event.code]) triggerPlayerAction(KEY_BINDINGS[event.code]);
+    if (state.mode === "two" && PLAYER_TWO_ACTIONS[code]) triggerPlayerTwoAction(PLAYER_TWO_ACTIONS[code]);
+    if (KEY_BINDINGS[code]) triggerPlayerAction(KEY_BINDINGS[code]);
     unlockAudio();
   });
 
   window.addEventListener("keyup", (event) => {
+    const ownSide = friendVolleyOwnSide();
+    const eventCode = friendVolleyEventCode(event);
+    const code = friendVolley.enabled ? friendVolleyCanonicalCode(eventCode, ownSide) : eventCode;
     if (friendVolley.enabled) {
-      const sideKey = friendVolleySideForCode(event.code);
-      if (sideKey && sideKey !== friendVolleyOwnSide()) {
+      const sideKey = friendVolleySideForCode(code);
+      if (sideKey && sideKey !== ownSide) {
         event.preventDefault();
         event.stopPropagation();
         return;
       }
     }
-    keys.delete(event.code);
+    keys.delete(code);
+    if (code !== eventCode) keys.delete(eventCode);
   });
 
   canvas.addEventListener("pointerdown", (event) => {
@@ -38911,6 +38990,8 @@ document.addEventListener('click', function(e){
     if (input.target) eventPayload.target = String(input.target).slice(0, 40);
     if (input.label) eventPayload.label = String(input.label).slice(0, 60);
     if (input.code) eventPayload.code = String(input.code).slice(0, 40);
+    if (input.originalCode) eventPayload.originalCode = String(input.originalCode).slice(0, 40);
+    if (input.action) eventPayload.action = String(input.action).slice(0, 30);
     if (input.sideKey) eventPayload.sideKey = String(input.sideKey).slice(0, 10);
     if (typeof input.down === "boolean") eventPayload.down = input.down;
     if (typeof input.repeat === "boolean") eventPayload.repeat = input.repeat;
