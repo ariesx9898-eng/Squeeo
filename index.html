@@ -35678,6 +35678,17 @@ button {
     KeyP: "smash",
     ShiftRight: "smash"
   };
+  const P1_MOVE_KEYS = ["KeyA", "KeyD", "KeyW"];
+  const P2_MOVE_KEYS = ["ArrowLeft", "ArrowRight", "ArrowUp"];
+  const P1_FRIEND_KEYS = new Set([...P1_MOVE_KEYS, ...Object.keys(KEY_BINDINGS)]);
+  const P2_FRIEND_KEYS = new Set([...P2_MOVE_KEYS, ...Object.keys(PLAYER_TWO_ACTIONS)]);
+  const friendVolley = {
+    enabled: false,
+    sideKey: "p1",
+    remoteKeys: new Set(),
+    seq: 0,
+    lastSnapshotAt: 0
+  };
 
   const pointer = {
     active: false,
@@ -36101,6 +36112,223 @@ button {
     syncModeToggle();
   }
 
+  function friendVolleyOwnSide() {
+    return friendVolley.sideKey === "p2" ? "p2" : "p1";
+  }
+
+  function friendVolleySideForCode(code) {
+    if (P1_FRIEND_KEYS.has(code)) return "p1";
+    if (P2_FRIEND_KEYS.has(code)) return "p2";
+    return "";
+  }
+
+  function volleyKeyDown(code, side) {
+    return keys.has(code) || (friendVolley.enabled && friendVolley.remoteKeys.has(`${side}:${code}`));
+  }
+
+  function localFriendVolleyKey(event, down) {
+    const sideKey = friendVolleySideForCode(event.code);
+    if (!sideKey) return { ignore: true };
+    if (sideKey !== friendVolleyOwnSide()) return { blocked: true };
+    return {
+      kind: "volley-pork-key",
+      gameId: "volley-pork",
+      code: event.code,
+      sideKey,
+      down: Boolean(down),
+      repeat: Boolean(event.repeat),
+      seq: ++friendVolley.seq,
+      at: Date.now()
+    };
+  }
+
+  function friendVolleyNumber(value, fallback) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+  }
+
+  function friendVolleyFighterSnapshot(fighter) {
+    return {
+      x: fighter.x,
+      y: fighter.y,
+      vx: fighter.vx,
+      vy: fighter.vy,
+      targetX: fighter.targetX,
+      onGround: fighter.onGround,
+      action: fighter.action,
+      actionTimer: fighter.actionTimer,
+      comboStage: fighter.comboStage,
+      stageTimer: fighter.stageTimer,
+      superTimer: fighter.superTimer,
+      lean: fighter.lean,
+      squash: fighter.squash
+    };
+  }
+
+  function applyFriendVolleyFighterSnapshot(fighter, snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return;
+    fighter.x = friendVolleyNumber(snapshot.x, fighter.x);
+    fighter.y = friendVolleyNumber(snapshot.y, fighter.y);
+    fighter.vx = friendVolleyNumber(snapshot.vx, fighter.vx);
+    fighter.vy = friendVolleyNumber(snapshot.vy, fighter.vy);
+    fighter.targetX = friendVolleyNumber(snapshot.targetX, fighter.targetX);
+    fighter.onGround = Boolean(snapshot.onGround);
+    fighter.action = typeof snapshot.action === "string" ? snapshot.action : fighter.action;
+    fighter.actionTimer = friendVolleyNumber(snapshot.actionTimer, fighter.actionTimer);
+    fighter.comboStage = typeof snapshot.comboStage === "string" ? snapshot.comboStage : fighter.comboStage;
+    fighter.stageTimer = friendVolleyNumber(snapshot.stageTimer, fighter.stageTimer);
+    fighter.superTimer = friendVolleyNumber(snapshot.superTimer, fighter.superTimer);
+    fighter.lean = friendVolleyNumber(snapshot.lean, fighter.lean);
+    fighter.squash = friendVolleyNumber(snapshot.squash, fighter.squash);
+  }
+
+  function friendVolleySnapshot() {
+    return {
+      scores: state.scores.slice(0, 2),
+      rally: state.rally,
+      combo: state.combo,
+      comboTimer: state.comboTimer,
+      comboLabel: state.comboLabel,
+      juice: state.juice,
+      pointTimer: state.pointTimer,
+      pointWinner: state.pointWinner,
+      pointReason: state.pointReason,
+      serveSide: state.serveSide,
+      player: friendVolleyFighterSnapshot(player),
+      rival: friendVolleyFighterSnapshot(rival),
+      ball: {
+        x: ball.x,
+        y: ball.y,
+        vx: ball.vx,
+        vy: ball.vy,
+        r: ball.r,
+        spin: ball.spin,
+        angle: ball.angle,
+        lastHit: ball.lastHit,
+        groundSide: ball.groundSide,
+        bounces: ball.bounces,
+        touchLock: ball.touchLock,
+        settleTimer: ball.settleTimer,
+        frozen: ball.frozen
+      }
+    };
+  }
+
+  function applyFriendVolleySnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return false;
+    if (Array.isArray(snapshot.scores)) {
+      state.scores[0] = Math.max(0, Math.round(friendVolleyNumber(snapshot.scores[0], state.scores[0])));
+      state.scores[1] = Math.max(0, Math.round(friendVolleyNumber(snapshot.scores[1], state.scores[1])));
+    }
+    state.rally = Math.max(0, Math.round(friendVolleyNumber(snapshot.rally, state.rally)));
+    state.combo = Math.max(0, friendVolleyNumber(snapshot.combo, state.combo));
+    state.comboTimer = Math.max(0, friendVolleyNumber(snapshot.comboTimer, state.comboTimer));
+    state.comboLabel = typeof snapshot.comboLabel === "string" ? snapshot.comboLabel : state.comboLabel;
+    state.juice = clamp(friendVolleyNumber(snapshot.juice, state.juice), 0, 1);
+    state.pointTimer = Math.max(0, friendVolleyNumber(snapshot.pointTimer, state.pointTimer));
+    state.pointWinner = typeof snapshot.pointWinner === "string" ? snapshot.pointWinner : snapshot.pointWinner || null;
+    state.pointReason = typeof snapshot.pointReason === "string" ? snapshot.pointReason : state.pointReason;
+    state.serveSide = snapshot.serveSide === "right" ? "right" : "left";
+    applyFriendVolleyFighterSnapshot(player, snapshot.player);
+    applyFriendVolleyFighterSnapshot(rival, snapshot.rival);
+    if (snapshot.ball && typeof snapshot.ball === "object") {
+      ball.x = friendVolleyNumber(snapshot.ball.x, ball.x);
+      ball.y = friendVolleyNumber(snapshot.ball.y, ball.y);
+      ball.vx = friendVolleyNumber(snapshot.ball.vx, ball.vx);
+      ball.vy = friendVolleyNumber(snapshot.ball.vy, ball.vy);
+      ball.r = friendVolleyNumber(snapshot.ball.r, ball.r);
+      ball.spin = friendVolleyNumber(snapshot.ball.spin, ball.spin);
+      ball.angle = friendVolleyNumber(snapshot.ball.angle, ball.angle);
+      ball.lastHit = snapshot.ball.lastHit === "right" ? "right" : "left";
+      ball.groundSide = snapshot.ball.groundSide === "right" || snapshot.ball.groundSide === "left" ? snapshot.ball.groundSide : null;
+      ball.bounces = Math.max(0, Math.round(friendVolleyNumber(snapshot.ball.bounces, ball.bounces)));
+      ball.touchLock = Math.max(0, friendVolleyNumber(snapshot.ball.touchLock, ball.touchLock));
+      ball.settleTimer = Math.max(0, friendVolleyNumber(snapshot.ball.settleTimer, ball.settleTimer));
+      ball.frozen = Boolean(snapshot.ball.frozen);
+      ball.scripted = null;
+    }
+    syncHud();
+    return true;
+  }
+
+  function sendFriendVolleySnapshot() {
+    if (!friendVolley.enabled || friendVolleyOwnSide() !== "p1") return;
+    const now = Date.now();
+    if (now - friendVolley.lastSnapshotAt < 700) return;
+    friendVolley.lastSnapshotAt = now;
+    try {
+      window.parent?.postMessage({
+        type: "ai-platform-friend-play",
+        event: "local-input",
+        payload: {
+          kind: "volley-pork-state",
+          gameId: "volley-pork",
+          sideKey: "p1",
+          seq: ++friendVolley.seq,
+          at: now,
+          volley: friendVolleySnapshot()
+        }
+      }, "*");
+    } catch (error) {
+      // The game also runs standalone, where there may be no parent frame.
+    }
+  }
+
+  function receiveFriendVolleyInput(input) {
+    if (!friendVolley.enabled || !input || typeof input !== "object") return false;
+    if (input.kind === "volley-pork-state") {
+      if (friendVolleyOwnSide() === "p1") return true;
+      return applyFriendVolleySnapshot(input.volley);
+    }
+    if (input.kind !== "volley-pork-key") return false;
+    const sideKey = input.sideKey === "p2" ? "p2" : "p1";
+    if (sideKey === friendVolleyOwnSide()) return true;
+    const code = String(input.code || "");
+    if (friendVolleySideForCode(code) !== sideKey) return false;
+    const remoteKey = `${sideKey}:${code}`;
+    if (input.down) {
+      friendVolley.remoteKeys.add(remoteKey);
+      if (!input.repeat) {
+        if (sideKey === "p1" && KEY_BINDINGS[code]) triggerPlayerAction(KEY_BINDINGS[code]);
+        if (sideKey === "p2" && PLAYER_TWO_ACTIONS[code]) triggerPlayerTwoAction(PLAYER_TWO_ACTIONS[code]);
+      }
+    } else {
+      friendVolley.remoteKeys.delete(remoteKey);
+    }
+    return true;
+  }
+
+  function setFriendVolleyMode(config = {}) {
+    friendVolley.enabled = Boolean(config.enabled);
+    friendVolley.sideKey = config.sideKey === "p2" ? "p2" : "p1";
+    friendVolley.remoteKeys.clear();
+    pointer.active = false;
+    pointer.targetX = null;
+    if (friendVolley.enabled) {
+      setVolleyMode("two");
+      if (modeToggle) {
+        modeToggle.disabled = true;
+        modeToggle.style.display = "none";
+      }
+      const touchRail = document.querySelector(".touch-rail");
+      if (touchRail) touchRail.style.display = friendVolleyOwnSide() === "p2" ? "none" : "";
+      pulseHud(friendVolleyOwnSide() === "p2" ? "FRIEND P2" : "FRIEND P1");
+    } else {
+      if (modeToggle) {
+        modeToggle.disabled = false;
+        modeToggle.style.display = "";
+      }
+      const touchRail = document.querySelector(".touch-rail");
+      if (touchRail) touchRail.style.display = "";
+    }
+  }
+
+  window.__friendVolleyPorkApi = {
+    setFriendMode: setFriendVolleyMode,
+    localKey: localFriendVolleyKey,
+    receive: receiveFriendVolleyInput
+  };
+
   function updateFighter(fighter, dt) {
     for (const key of Object.keys(fighter.cooldowns)) {
       fighter.cooldowns[key] = Math.max(0, fighter.cooldowns[key] - dt);
@@ -36146,10 +36374,15 @@ button {
   function updatePlayerIntent(fighter) {
     let move = 0;
     const useArrowKeys = state.mode !== "two";
-    if ((useArrowKeys && keys.has("ArrowLeft")) || keys.has("KeyA")) move -= 1;
-    if ((useArrowKeys && keys.has("ArrowRight")) || keys.has("KeyD")) move += 1;
+    if (friendVolley.enabled) {
+      if (volleyKeyDown("KeyA", "p1")) move -= 1;
+      if (volleyKeyDown("KeyD", "p1")) move += 1;
+    } else {
+      if ((useArrowKeys && keys.has("ArrowLeft")) || keys.has("KeyA")) move -= 1;
+      if ((useArrowKeys && keys.has("ArrowRight")) || keys.has("KeyD")) move += 1;
+    }
 
-    if (pointer.active && pointer.targetX !== null) {
+    if (!friendVolley.enabled && pointer.active && pointer.targetX !== null) {
       fighter.targetX = pointer.targetX;
     } else if (move !== 0) {
       fighter.targetX = fighter.x + move * 70;
@@ -36157,7 +36390,10 @@ button {
       fighter.targetX = lerp(fighter.targetX, fighter.x, 0.18);
     }
 
-    if (((useArrowKeys && keys.has("ArrowUp")) || keys.has("KeyW")) && fighter.onGround) {
+    const jumpHeld = friendVolley.enabled
+      ? volleyKeyDown("KeyW", "p1")
+      : ((useArrowKeys && keys.has("ArrowUp")) || keys.has("KeyW"));
+    if (jumpHeld && fighter.onGround) {
       fighter.vy = -720;
       fighter.onGround = false;
       fighter.squash = 0.5;
@@ -36167,8 +36403,8 @@ button {
 
   function updatePlayerTwoIntent(fighter) {
     let move = 0;
-    if (keys.has("ArrowLeft")) move -= 1;
-    if (keys.has("ArrowRight")) move += 1;
+    if (volleyKeyDown("ArrowLeft", "p2")) move -= 1;
+    if (volleyKeyDown("ArrowRight", "p2")) move += 1;
 
     if (move !== 0) {
       fighter.targetX = fighter.x + move * 70;
@@ -36176,7 +36412,7 @@ button {
       fighter.targetX = lerp(fighter.targetX, fighter.x, 0.18);
     }
 
-    if (keys.has("ArrowUp") && fighter.onGround) {
+    if (volleyKeyDown("ArrowUp", "p2") && fighter.onGround) {
       fighter.vy = -720;
       fighter.onGround = false;
       fighter.squash = 0.5;
@@ -36666,6 +36902,7 @@ button {
       updateBall(dt);
       updateCollisions();
     }
+    sendFriendVolleySnapshot();
     if (state.time - state.lastHudSync > 0.045) {
       syncHud();
       state.lastHudSync = state.time;
@@ -36952,6 +37189,14 @@ button {
   window.addEventListener("keydown", (event) => {
     const movementKeys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "KeyA", "KeyD", "KeyW", ...Object.keys(KEY_BINDINGS), ...Object.keys(PLAYER_TWO_ACTIONS)];
     if (movementKeys.includes(event.code)) event.preventDefault();
+    if (friendVolley.enabled) {
+      const sideKey = friendVolleySideForCode(event.code);
+      if (sideKey && sideKey !== friendVolleyOwnSide()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+    }
     keys.add(event.code);
     if (event.repeat) return;
     if (state.mode === "two" && PLAYER_TWO_ACTIONS[event.code]) triggerPlayerTwoAction(PLAYER_TWO_ACTIONS[event.code]);
@@ -36960,6 +37205,14 @@ button {
   });
 
   window.addEventListener("keyup", (event) => {
+    if (friendVolley.enabled) {
+      const sideKey = friendVolleySideForCode(event.code);
+      if (sideKey && sideKey !== friendVolleyOwnSide()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+    }
     keys.delete(event.code);
   });
 
@@ -37050,7 +37303,7 @@ function gameFriendPlayInjection(){
     'html.friend-play-game .layout.split-active>.board-wrap,html.friend-play-game .layout.split-active>.board-panel{display:block!important;}',
     'html.friend-play-game .split-board-wrap,html.friend-play-game .player-screen{display:none!important;}',
     'html.friend-play-game .board,html.friend-play-game .board-wrap .board,html.friend-play-game .board-panel .board{margin-left:auto!important;margin-right:auto!important;}',
-    'html.friend-play-game #aiMode,html.friend-play-game #twoMode,html.friend-play-game #newGame,html.friend-play-game #undo,html.friend-play-game #startButton,html.friend-play-game #newRoundButton,html.friend-play-game #undoButton,html.friend-play-game #resetButton{display:none!important;}',
+    'html.friend-play-game #aiMode,html.friend-play-game #twoMode,html.friend-play-game #modeToggle,html.friend-play-game #newGame,html.friend-play-game #undo,html.friend-play-game #startButton,html.friend-play-game #newRoundButton,html.friend-play-game #undoButton,html.friend-play-game #resetButton{display:none!important;}',
     'html.friend-play-game .friend-multiplayer-badge{display:grid;gap:2px;margin:0 0 12px;padding:10px 12px;border:1px solid rgba(255,36,54,.42);border-radius:8px;background:rgba(255,36,54,.09);color:#f4f5f7;font-family:"Share Tech Mono",monospace;text-transform:uppercase;letter-spacing:.08em;}',
     'html.friend-play-game .friend-multiplayer-badge small{color:#ff8a2a!important;}',
     '</style>',
@@ -37063,7 +37316,7 @@ function gameFriendPlayInjection(){
     'function clickTarget(target,input){if(!target)return false;applying=true;["pointerdown","mousedown","pointerup","mouseup","click"].forEach(function(type){fire(target,type,input||{});});setTimeout(function(){applying=false;},0);return true;}',
     'function ensureBadge(){var shell=document.querySelector(".shell")||document.body;var badge=document.getElementById("friendMultiplayerBadge");if(!badge){badge=document.createElement("div");badge.id="friendMultiplayerBadge";badge.className="friend-multiplayer-badge";shell.insertBefore(badge,shell.firstChild);}badge.innerHTML="<strong>Friend Multiplayer</strong><small>"+(config.role||"Player")+" vs "+(config.opponentUsername||"Friend")+"</small>";}',
     'function setSplitMode(){var layout=document.getElementById("layout");if(layout&&layout.classList.contains("split-active"))return;var two=document.getElementById("twoMode");if(two)two.click();}',
-    'function applyPov(){document.documentElement.classList.toggle("friend-play-game",!!config.enabled);document.documentElement.dataset.friendGame=config.gameId||"";document.documentElement.dataset.friendSide=config.sideKey||"";if(!config.enabled)return;if(config.gameId==="mancala"&&window.__friendMancalaApi&&window.__friendMancalaApi.setFriendMode)window.__friendMancalaApi.setFriendMode(true);if(config.gameId==="battleship"&&window.__friendBattleshipApi)window.__friendBattleshipApi.setFriendMode(true);ensureBadge();}',
+    'function applyPov(){document.documentElement.classList.toggle("friend-play-game",!!config.enabled);document.documentElement.dataset.friendGame=config.gameId||"";document.documentElement.dataset.friendSide=config.sideKey||"";if(config.gameId==="volley-pork"&&window.__friendVolleyPorkApi&&window.__friendVolleyPorkApi.setFriendMode)window.__friendVolleyPorkApi.setFriendMode(config);if(!config.enabled)return;if(config.gameId==="mancala"&&window.__friendMancalaApi&&window.__friendMancalaApi.setFriendMode)window.__friendMancalaApi.setFriendMode(true);if(config.gameId==="battleship"&&window.__friendBattleshipApi)window.__friendBattleshipApi.setFriendMode(true);ensureBadge();}',
     'function currentTurnSide(){var text=((document.getElementById("status")||document.getElementById("turnLabel")||{}).textContent||"").toLowerCase();if(config.gameId==="chess")return text.indexOf("black")!==-1?"b":text.indexOf("white")!==-1?"w":"";if(config.gameId==="checkers")return text.indexOf("black")!==-1?"black":text.indexOf("red")!==-1?"red":"";if(config.gameId==="mancala"){var match=text.match(/player\\s*([12])/);return match?match[1]:"";}return"";}',
     'function squareInput(event){var square=event.target&&event.target.closest&&event.target.closest(".square");if(!square)return null;var label=square.getAttribute("aria-label")||"";var main=document.getElementById("board");if(main&&main.contains(square)){if(square.disabled||currentTurnSide()!==String(config.sideKey||""))return{blocked:true};return label?{kind:"logical-click",gameId:config.gameId,target:"square",label:label,seq:++seq,at:Date.now()}:null;}var screen=ownScreen();if(!screen||!screen.contains(square))return{ignore:true};if(square.disabled||currentTurnSide()!==String(config.sideKey||""))return{blocked:true};return label?{kind:"logical-click",gameId:config.gameId,target:"square",label:label,seq:++seq,at:Date.now()}:null;}',
     'function mancalaPitIndex(pit){var board=pit.closest(".mancala-board");if(!board)return null;var pits=Array.prototype.slice.call(board.querySelectorAll(".pit"));var pos=pits.indexOf(pit);var map=board.id==="boardP2"?[5,4,3,2,1,0,7,8,9,10,11,12]:[12,11,10,9,8,7,0,1,2,3,4,5];return map[pos];}',
@@ -37072,14 +37325,16 @@ function gameFriendPlayInjection(){
     'function connect4Input(event){if(config.gameId!=="connect-4")return null;var target=event.target&&event.target.closest&&event.target.closest(".drop-button,.slot");if(!target)return{ignore:true};var col=Number(target.dataset.col);if(!Number.isInteger(col)){var text=target.getAttribute("aria-label")||target.textContent||"";var match=text.match(/column\\s+(\\d+)/i);col=match?Number(match[1])-1:NaN;}if(!Number.isInteger(col)||col<0||col>6)return{ignore:true};if(target.disabled||target.getAttribute("aria-disabled")==="true"||connect4TurnSide()!==String(config.sideKey||""))return{blocked:true};return{kind:"connect4-column",gameId:"connect-4",target:"column",col:col,seq:++seq,at:Date.now()};}',
     'function battleshipInput(event){if(config.gameId!=="battleship")return null;var button=event.target&&event.target.closest&&event.target.closest("button");if(!button)return null;var cell=button.classList&&button.classList.contains("cell")?button:null;if(cell){var row=Number(cell.dataset.row);var col=Number(cell.dataset.col);if(!Number.isInteger(row)||!Number.isInteger(col))return null;if(cell.closest("#enemyGrid"))return{kind:"battleship-shot",gameId:"battleship",row:row,col:col,seq:++seq,at:Date.now()};if(cell.closest("#playerGrid"))return{defer:true,make:function(){var api=window.__friendBattleshipApi;return api?Object.assign({kind:"battleship-fleet",gameId:"battleship",seq:++seq,at:Date.now()},api.ownFleet()):null;}};}if(button.id==="randomButton")return{defer:true,make:function(){var api=window.__friendBattleshipApi;return api?Object.assign({kind:"battleship-fleet",gameId:"battleship",seq:++seq,at:Date.now()},api.ownFleet()):null;}};return null;}',
     'function logicalFromEvent(event){if(config.gameId==="chess"||config.gameId==="checkers")return squareInput(event);if(config.gameId==="mancala")return mancalaInput(event);if(config.gameId==="connect-4")return connect4Input(event);if(config.gameId==="battleship")return battleshipInput(event);return null;}',
-    'function applyLogical(input){if(!input)return false;if(input.kind==="logical-click"){var label=cssEscape(input.label||"");return clickTarget(document.querySelector("#board .square[aria-label=\\""+label+"\\"]"),input);}if(input.kind==="mancala-state"||input.kind==="mancala-pit"){if(window.__friendMancalaApi&&window.__friendMancalaApi.receive)return !!window.__friendMancalaApi.receive(input);if(input.kind==="mancala-pit"){var map=[12,11,10,9,8,7,0,1,2,3,4,5];var pits=Array.prototype.slice.call(document.querySelectorAll("#board .pit"));var pos=map.indexOf(Number(input.pitIndex));return pos>=0?clickTarget(pits[pos],input):false;}return false;}if(input.kind==="connect4-column"){var col=Number(input.col);if(!Number.isInteger(col))return false;return clickTarget(document.querySelector(".drop-button[data-col=\\""+col+"\\"],.slot[data-col=\\""+col+"\\"]"),input);}if(input.kind&&input.kind.indexOf("battleship-")===0&&window.__friendBattleshipApi){window.__friendBattleshipApi.receive(input);return true;}return false;}',
+    'function applyLogical(input){if(!input)return false;if(input.kind==="logical-click"){var label=cssEscape(input.label||"");return clickTarget(document.querySelector("#board .square[aria-label=\\""+label+"\\"]"),input);}if(input.kind==="mancala-state"||input.kind==="mancala-pit"){if(window.__friendMancalaApi&&window.__friendMancalaApi.receive)return !!window.__friendMancalaApi.receive(input);if(input.kind==="mancala-pit"){var map=[12,11,10,9,8,7,0,1,2,3,4,5];var pits=Array.prototype.slice.call(document.querySelectorAll("#board .pit"));var pos=map.indexOf(Number(input.pitIndex));return pos>=0?clickTarget(pits[pos],input):false;}return false;}if(input.kind==="connect4-column"){var col=Number(input.col);if(!Number.isInteger(col))return false;return clickTarget(document.querySelector(".drop-button[data-col=\\""+col+"\\"],.slot[data-col=\\""+col+"\\"]"),input);}if((input.kind==="volley-pork-key"||input.kind==="volley-pork-state")&&window.__friendVolleyPorkApi&&window.__friendVolleyPorkApi.receive)return !!window.__friendVolleyPorkApi.receive(input);if(input.kind&&input.kind.indexOf("battleship-")===0&&window.__friendBattleshipApi){window.__friendBattleshipApi.receive(input);return true;}return false;}',
     'function point(input){var cw=Math.max(document.documentElement.clientWidth,window.innerWidth||0);var ch=Math.max(document.documentElement.clientHeight,window.innerHeight||0);var iw=Number(input&&input.width)||cw;var ih=Number(input&&input.height)||ch;return{x:(Number(input&&input.x)||0)*(iw?cw/iw:1),y:(Number(input&&input.y)||0)*(ih?ch/ih:1)};}',
     'function pointTarget(input){var p=point(input);return document.elementFromPoint(p.x,p.y);}',
     'function fire(target,type,input){try{var p=point(input);target.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,clientX:p.x,clientY:p.y,button:Number(input.button)||0,buttons:type==="mouseup"||type==="click"?0:1}));}catch(e){}}',
     'function applyInput(input){if(!config.enabled||!input)return;if(applyLogical(input))return;var target=pointTarget(input);if(!target)return;clickTarget(target,input);}',
     'window.addEventListener("message",function(event){var data=event.data||{};if(data.type==="ai-platform-friend-play-config"){config=data.config||{enabled:false};applyPov();send("ready",{href:location.href});}if(data.type==="ai-platform-friend-play-remote-input")applyInput(data.input||data.payload);});',
-    'document.addEventListener("click",function(event){if(!config.enabled||applying)return;var logical=logicalFromEvent(event);if(logical&&logical.blocked){event.preventDefault();event.stopPropagation();return;}if(logical&&logical.ignore)return;if(logical&&logical.defer){setTimeout(function(){var payload=logical.make&&logical.make();if(payload)send("local-input",payload);},40);return;}if(logical){send("local-input",logical);return;}send("local-input",{kind:"click",gameId:config.gameId||"",x:event.clientX,y:event.clientY,button:event.button||0,seq:++seq,at:Date.now(),width:Math.max(document.documentElement.clientWidth,window.innerWidth||0),height:Math.max(document.documentElement.clientHeight,window.innerHeight||0)});},true);',
+    'document.addEventListener("click",function(event){if(!config.enabled||applying)return;if(config.gameId==="volley-pork")return;var logical=logicalFromEvent(event);if(logical&&logical.blocked){event.preventDefault();event.stopPropagation();return;}if(logical&&logical.ignore)return;if(logical&&logical.defer){setTimeout(function(){var payload=logical.make&&logical.make();if(payload)send("local-input",payload);},40);return;}if(logical){send("local-input",logical);return;}send("local-input",{kind:"click",gameId:config.gameId||"",x:event.clientX,y:event.clientY,button:event.button||0,seq:++seq,at:Date.now(),width:Math.max(document.documentElement.clientWidth,window.innerWidth||0),height:Math.max(document.documentElement.clientHeight,window.innerHeight||0)});},true);',
     'document.addEventListener("keydown",function(event){if(!config.enabled||applying||config.gameId!=="connect-4")return;if(event.key!=="Enter"&&event.key!==" ")return;if(!(event.target&&event.target.closest&&event.target.closest(".slot")))return;var logical=connect4Input(event);if(logical&&logical.blocked){event.preventDefault();event.stopPropagation();return;}if(logical&&!logical.ignore)send("local-input",logical);},true);',
+    'document.addEventListener("keydown",function(event){if(!config.enabled||applying||config.gameId!=="volley-pork")return;var api=window.__friendVolleyPorkApi;if(!api||!api.localKey)return;var payload=api.localKey(event,true);if(payload&&payload.blocked){event.preventDefault();event.stopPropagation();return;}if(payload&&!payload.ignore)send("local-input",payload);},true);',
+    'document.addEventListener("keyup",function(event){if(!config.enabled||applying||config.gameId!=="volley-pork")return;var api=window.__friendVolleyPorkApi;if(!api||!api.localKey)return;var payload=api.localKey(event,false);if(payload&&payload.blocked){event.preventDefault();event.stopPropagation();return;}if(payload&&!payload.ignore)send("local-input",payload);},true);',
     'send("ready",{href:location.href});',
     '}());<\/script>'
   ].join('');
@@ -38633,6 +38888,7 @@ document.addEventListener('click', function(e){
     if (!identity || !session || !input || typeof input !== "object") return;
     if (!isFriendPlayGame(session.gameId)) return;
     const rawBattleship = input.battleship && typeof input.battleship === "object" ? input.battleship : {};
+    const rawVolley = input.volley && typeof input.volley === "object" ? input.volley : {};
     const eventPayload = {
       kind: String(input.kind || "click").slice(0, 40),
       gameId: String(input.gameId || session.gameId).slice(0, 40),
@@ -38664,6 +38920,7 @@ document.addEventListener('click', function(e){
     if (Array.isArray(input.fleet)) eventPayload.fleet = input.fleet.slice(0, 5);
     if (typeof input.ready === "boolean") eventPayload.ready = input.ready;
     if (Object.keys(rawBattleship).length) eventPayload.battleship = rawBattleship;
+    if (Object.keys(rawVolley).length) eventPayload.volley = rawVolley;
     const payload = {
       id: `friend-move-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       session_id: session.id,
@@ -42104,14 +42361,19 @@ document.addEventListener('click', function(e){
     const typingGlobalMessage = Boolean(document.activeElement?.closest?.("#globalChatForm"));
     refreshGlobalChatMessages(state.authMode === "global-chat" && !typingGlobalMessage).catch(() => {});
   }, 15000);
+  let friendGameSyncAt = 0;
   window.setInterval(() => {
     if (!state.user) return;
+    const fastVolley = state.activeFriendGameSession?.gameId === "volley-pork";
+    const now = Date.now();
+    if (!fastVolley && now - friendGameSyncAt < 2500) return;
+    friendGameSyncAt = now;
     refreshFriendGameRequests(false).catch(() => {});
     refreshFriendGameSessions(false).catch(() => {});
     if (state.activeFriendGameSession) {
       refreshFriendGameMoves(state.activeFriendGameSession.id).catch(() => {});
     }
-  }, 2500);
+  }, 650);
 })();
 
 </script>
