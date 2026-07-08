@@ -35330,7 +35330,8 @@ button {
 }
 
 .touch-button,
-.sound-toggle {
+.sound-toggle,
+.mode-toggle {
   appearance: none;
   border: 1px solid rgba(246, 241, 232, 0.18);
   color: var(--ink);
@@ -35459,6 +35460,24 @@ button {
   box-shadow: 0 -12px 0 -2px var(--tennis);
 }
 
+.mode-toggle {
+  position: absolute;
+  right: max(64px, calc(env(safe-area-inset-right) + 64px));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  width: 58px;
+  height: 42px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 950;
+  letter-spacing: 0;
+}
+
+.mode-toggle.is-two {
+  border-color: rgba(71, 215, 171, 0.62);
+  background: rgba(71, 215, 171, 0.2);
+  color: var(--tennis);
+}
+
 .sound-toggle {
   position: absolute;
   right: max(12px, env(safe-area-inset-right));
@@ -35532,6 +35551,12 @@ button {
     height: 52px;
   }
 
+  .mode-toggle {
+    right: max(58px, calc(env(safe-area-inset-right) + 58px));
+    width: 52px;
+    height: 38px;
+  }
+
   .sound-toggle {
     width: 38px;
     height: 38px;
@@ -35554,7 +35579,7 @@ button {
         <span id="rallyText" class="rally-text">SIMULATOR</span>
       </div>
       <div class="score-wrap rival-score">
-        <span class="score-name">CPU</span>
+        <span id="rivalName" class="score-name">CPU</span>
         <span id="cpuScore" class="score-value">0</span>
       </div>
     </section>
@@ -35584,6 +35609,7 @@ button {
     <button id="soundToggle" class="sound-toggle" aria-label="Toggle sound" aria-pressed="false">
       <span class="sound-glyph"></span>
     </button>
+    <button id="modeToggle" class="mode-toggle" type="button" aria-label="Toggle CPU or two player mode" aria-pressed="false">CPU</button>
   </main>
   <script>
 (() => {
@@ -35592,11 +35618,13 @@ button {
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
   const playerScoreEl = document.getElementById("playerScore");
+  const rivalNameEl = document.getElementById("rivalName");
   const cpuScoreEl = document.getElementById("cpuScore");
   const comboLabelEl = document.getElementById("comboLabel");
   const rallyTextEl = document.getElementById("rallyText");
   const juiceMeterEl = document.getElementById("juiceMeter");
   const soundToggle = document.getElementById("soundToggle");
+  const modeToggle = document.getElementById("modeToggle");
 
   const TAU = Math.PI * 2;
   const COURT = { width: 0, height: 0, floor: 0, mid: 0, dpr: 1 };
@@ -35627,6 +35655,22 @@ button {
     KeyV: "pancake"
   };
 
+  const PLAYER_TWO_ACTIONS = {
+    Enter: "hit",
+    NumpadEnter: "hit",
+    Numpad1: "hit",
+    KeyU: "hit",
+    ArrowDown: "block",
+    Numpad2: "block",
+    KeyI: "block",
+    Numpad3: "dribble",
+    KeyO: "dribble",
+    Numpad4: "smash",
+    Slash: "smash",
+    KeyP: "smash",
+    ShiftRight: "smash"
+  };
+
   const pointer = {
     active: false,
     x: 0,
@@ -35641,6 +35685,7 @@ button {
   };
 
   const state = {
+    mode: "cpu",
     scores: [0, 0],
     rally: 0,
     combo: 0,
@@ -35900,15 +35945,24 @@ button {
     return true;
   }
 
-  function triggerPlayerAction(action) {
+  function triggerAction(fighter, action, shouldMarkButton = false) {
     unlockAudio();
-    if ((action === "smash" || action === "slam") && state.juice >= 1) {
-      player.superTimer = 0.7;
+    if (fighter === player && (action === "smash" || action === "slam") && state.juice >= 1) {
+      fighter.superTimer = 0.7;
       state.juice = 0;
       pulseHud("HAMMER READY");
     }
-    setAction(player, action);
-    markButton(action);
+    setAction(fighter, action);
+    if (shouldMarkButton) markButton(action);
+  }
+
+  function triggerPlayerAction(action) {
+    triggerAction(player, action, true);
+  }
+
+  function triggerPlayerTwoAction(action) {
+    if (state.mode !== "two") return;
+    triggerAction(rival, action, false);
   }
 
   function markButton(action) {
@@ -35939,7 +35993,7 @@ button {
     fighter.squash = 1.1;
     spawnImpact(ball.x, ball.y, "#f6f1e8", 24, 1.25);
     sound("block", 0.8);
-    if (!fighter.ai) addCombo("PANCAKE SAVE", 1.4);
+    if (fighter === player) addCombo("PANCAKE SAVE", 1.4);
   }
 
   function tryDribble(fighter) {
@@ -35951,7 +36005,7 @@ button {
     fighter.recentDribble = 0.62;
     fighter.handSwap *= -1;
 
-    if (!fighter.ai && fighter.dribbleCount >= 2 && state.time - (fighter.lastSixtySeven || -10) > 1.1) {
+    if (fighter === player && fighter.dribbleCount >= 2 && state.time - (fighter.lastSixtySeven || -10) > 1.1) {
       startSixtySeven(fighter);
       fighter.lastSixtySeven = state.time;
       return;
@@ -35972,7 +36026,7 @@ button {
     fighter.squash = 1;
     spawnImpact(ball.x, ball.y, "#ffc247", 13, 1.1);
     sound("hit", 0.8);
-    if (!fighter.ai) addCombo("DRIBBLE CHAIN", 1.1);
+    if (fighter === player) addCombo("DRIBBLE CHAIN", 1.1);
   }
 
   function startSixtySeven(fighter) {
@@ -35988,7 +36042,7 @@ button {
     fighter.comboStage = "sixty-seven";
     fighter.stageTimer = 1.65;
     fighter.squash = 1.2;
-    if (!fighter.ai) {
+    if (fighter === player) {
       addCombo("67 DRIBBLE", 2.4);
       pulseHud("67 DRIBBLE");
     }
@@ -36013,6 +36067,32 @@ button {
     state.comboTimer = Math.max(state.comboTimer, 1.2);
   }
 
+  function rivalLabel() {
+    return state.mode === "two" ? "P2" : "CPU";
+  }
+
+  function syncModeToggle() {
+    if (rivalNameEl) rivalNameEl.textContent = rivalLabel();
+    if (!modeToggle) return;
+    modeToggle.textContent = state.mode === "two" ? "2P" : "CPU";
+    modeToggle.classList.toggle("is-two", state.mode === "two");
+    modeToggle.setAttribute("aria-pressed", String(state.mode === "two"));
+  }
+
+  function setVolleyMode(mode) {
+    state.mode = mode === "two" ? "two" : "cpu";
+    rival.ai = state.mode !== "two";
+    rival.action = "idle";
+    rival.actionTimer = 0;
+    rival.comboStage = "";
+    rival.stageTimer = 0;
+    rival.targetX = rival.x;
+    state.combo = 0;
+    state.juice = 0;
+    pulseHud(state.mode === "two" ? "2 PLAYER" : "CPU MATCH");
+    syncModeToggle();
+  }
+
   function updateFighter(fighter, dt) {
     for (const key of Object.keys(fighter.cooldowns)) {
       fighter.cooldowns[key] = Math.max(0, fighter.cooldowns[key] - dt);
@@ -36029,6 +36109,8 @@ button {
 
     if (fighter.ai) {
       updateAiIntent(fighter, dt);
+    } else if (fighter === rival) {
+      updatePlayerTwoIntent(fighter);
     } else {
       updatePlayerIntent(fighter);
     }
@@ -36055,8 +36137,9 @@ button {
 
   function updatePlayerIntent(fighter) {
     let move = 0;
-    if (keys.has("ArrowLeft") || keys.has("KeyA")) move -= 1;
-    if (keys.has("ArrowRight") || keys.has("KeyD")) move += 1;
+    const useArrowKeys = state.mode !== "two";
+    if ((useArrowKeys && keys.has("ArrowLeft")) || keys.has("KeyA")) move -= 1;
+    if ((useArrowKeys && keys.has("ArrowRight")) || keys.has("KeyD")) move += 1;
 
     if (pointer.active && pointer.targetX !== null) {
       fighter.targetX = pointer.targetX;
@@ -36066,7 +36149,26 @@ button {
       fighter.targetX = lerp(fighter.targetX, fighter.x, 0.18);
     }
 
-    if ((keys.has("ArrowUp") || keys.has("KeyW")) && fighter.onGround) {
+    if (((useArrowKeys && keys.has("ArrowUp")) || keys.has("KeyW")) && fighter.onGround) {
+      fighter.vy = -720;
+      fighter.onGround = false;
+      fighter.squash = 0.5;
+      sound("hit", 0.25);
+    }
+  }
+
+  function updatePlayerTwoIntent(fighter) {
+    let move = 0;
+    if (keys.has("ArrowLeft")) move -= 1;
+    if (keys.has("ArrowRight")) move += 1;
+
+    if (move !== 0) {
+      fighter.targetX = fighter.x + move * 70;
+    } else {
+      fighter.targetX = lerp(fighter.targetX, fighter.x, 0.18);
+    }
+
+    if (keys.has("ArrowUp") && fighter.onGround) {
       fighter.vy = -720;
       fighter.onGround = false;
       fighter.squash = 0.5;
@@ -36443,7 +36545,7 @@ button {
     ball.frozen = true;
     state.shake = Math.max(state.shake, playerWon ? 7 : 4);
     state.flash = playerWon ? 1 : 0.55;
-    const text = playerWon ? `POINT${bonus ? ` +${bonus}` : ""}` : "CPU POINT";
+    const text = playerWon ? `POINT${bonus ? ` +${bonus}` : ""}` : `${rivalLabel()} POINT`;
     state.comboLabel = text;
     state.comboTimer = 1.6;
     addFloater(reason, COURT.mid, COURT.floor - 245, playerWon ? "#ffc247" : "#ff8c98", 1.15);
@@ -36543,6 +36645,7 @@ button {
   function syncHud() {
     playerScoreEl.textContent = String(state.scores[0]);
     cpuScoreEl.textContent = String(state.scores[1]);
+    syncModeToggle();
     comboLabelEl.textContent = state.comboLabel;
     rallyTextEl.textContent = state.rally > 0 ? `${state.rally} TOUCH RALLY` : "SIMULATOR";
     juiceMeterEl.style.width = `${Math.round(state.juice * 100)}%`;
@@ -36839,10 +36942,11 @@ button {
   window.addEventListener("resize", resize);
 
   window.addEventListener("keydown", (event) => {
-    const movementKeys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "KeyA", "KeyD", "KeyW", ...Object.keys(KEY_BINDINGS)];
+    const movementKeys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "KeyA", "KeyD", "KeyW", ...Object.keys(KEY_BINDINGS), ...Object.keys(PLAYER_TWO_ACTIONS)];
     if (movementKeys.includes(event.code)) event.preventDefault();
     keys.add(event.code);
     if (event.repeat) return;
+    if (state.mode === "two" && PLAYER_TWO_ACTIONS[event.code]) triggerPlayerTwoAction(PLAYER_TWO_ACTIONS[event.code]);
     if (KEY_BINDINGS[event.code]) triggerPlayerAction(KEY_BINDINGS[event.code]);
     unlockAudio();
   });
@@ -36889,7 +36993,13 @@ button {
     soundToggle.setAttribute("aria-pressed", String(audio.muted));
   });
 
+  modeToggle.addEventListener("click", () => {
+    unlockAudio();
+    setVolleyMode(state.mode === "two" ? "cpu" : "two");
+  });
+
   resize();
+  syncModeToggle();
   syncHud();
   requestAnimationFrame(frame);
 })();
@@ -37195,7 +37305,7 @@ document.addEventListener('click', function(e){
       category: "Arcade / Volleyball",
       tags: ["Volley Pork", "Arcade", "Reflex", "Physics"],
       summary:
-        "Enjoy a fast arcade volley match with punchy physics, combo actions, touch controls, keyboard moves, CPU rallies, and a neon stadium built around pure reaction time.",
+        "Enjoy a fast arcade volley match with punchy physics, combo actions, touch controls, keyboard moves, CPU rallies, local two-player mode, and a neon stadium built around pure reaction time.",
       highlight: "Hit, block, dribble, and smash your way through chaotic pork-powered rallies."
     },
     {
