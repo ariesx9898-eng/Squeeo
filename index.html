@@ -2101,6 +2101,60 @@ dl div {
   background: #ffffff;
 }
 
+.player-page.is-friend-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 99980;
+  display: block;
+  overflow: hidden;
+  background: #030203;
+  animation: none;
+}
+
+.player-page.is-friend-fullscreen .player-head {
+  display: none;
+}
+
+.player-page.is-friend-fullscreen .player-frame {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  min-height: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: #050405 !important;
+  box-shadow: none !important;
+}
+
+.player-page.is-friend-fullscreen .player-frame::before {
+  display: none;
+}
+
+.player-page.is-friend-fullscreen .player-frame iframe {
+  width: 100vw !important;
+  height: 100dvh !important;
+}
+
+.player-page.is-friend-fullscreen .friend-play-session {
+  position: fixed;
+  left: max(10px, env(safe-area-inset-left));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  z-index: 100004;
+  width: min(470px, calc(100vw - 20px));
+  margin: 0;
+  transform: scale(0.82);
+  transform-origin: left bottom;
+  opacity: 0.18;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.player-page.is-friend-fullscreen .friend-play-session:hover,
+.player-page.is-friend-fullscreen .friend-play-session:focus-within {
+  opacity: 1;
+  transform: scale(1);
+}
+
 .empty {
   display: grid;
   place-items: center;
@@ -35721,7 +35775,8 @@ button {
     sideKey: "p1",
     remoteKeys: new Set(),
     seq: 0,
-    lastSnapshotAt: 0
+    lastSnapshotAt: 0,
+    lastOwnStateAt: 0
   };
 
   const pointer = {
@@ -36224,6 +36279,10 @@ button {
     };
   }
 
+  function friendVolleyOwnFighter() {
+    return friendVolleyOwnSide() === "p2" ? rival : player;
+  }
+
   function applyFriendVolleyFighterSnapshot(fighter, snapshot) {
     if (!snapshot || typeof snapshot !== "object") return;
     fighter.x = friendVolleyNumber(snapshot.x, fighter.x);
@@ -36288,8 +36347,9 @@ button {
     state.pointWinner = typeof snapshot.pointWinner === "string" ? snapshot.pointWinner : snapshot.pointWinner || null;
     state.pointReason = typeof snapshot.pointReason === "string" ? snapshot.pointReason : state.pointReason;
     state.serveSide = snapshot.serveSide === "right" ? "right" : "left";
-    applyFriendVolleyFighterSnapshot(player, snapshot.player);
-    applyFriendVolleyFighterSnapshot(rival, snapshot.rival);
+    const ownSide = friendVolleyOwnSide();
+    if (ownSide !== "p1") applyFriendVolleyFighterSnapshot(player, snapshot.player);
+    if (ownSide !== "p2") applyFriendVolleyFighterSnapshot(rival, snapshot.rival);
     if (snapshot.ball && typeof snapshot.ball === "object") {
       ball.x = friendVolleyNumber(snapshot.ball.x, ball.x);
       ball.y = friendVolleyNumber(snapshot.ball.y, ball.y);
@@ -36313,7 +36373,7 @@ button {
   function sendFriendVolleySnapshot() {
     if (!friendVolley.enabled || friendVolleyOwnSide() !== "p1") return;
     const now = Date.now();
-    if (now - friendVolley.lastSnapshotAt < 700) return;
+    if (now - friendVolley.lastSnapshotAt < 260) return;
     friendVolley.lastSnapshotAt = now;
     try {
       window.parent?.postMessage({
@@ -36333,11 +36393,42 @@ button {
     }
   }
 
+  function sendFriendVolleyOwnState() {
+    if (!friendVolley.enabled) return;
+    const now = Date.now();
+    if (now - friendVolley.lastOwnStateAt < 180) return;
+    friendVolley.lastOwnStateAt = now;
+    try {
+      window.parent?.postMessage({
+        type: "ai-platform-friend-play",
+        event: "local-input",
+        payload: {
+          kind: "volley-pork-player-state",
+          gameId: "volley-pork",
+          sideKey: friendVolleyOwnSide(),
+          seq: ++friendVolley.seq,
+          at: now,
+          volley: {
+            fighter: friendVolleyFighterSnapshot(friendVolleyOwnFighter())
+          }
+        }
+      }, "*");
+    } catch (error) {
+      // Standalone games do not have a platform parent to sync with.
+    }
+  }
+
   function receiveFriendVolleyInput(input) {
     if (!friendVolley.enabled || !input || typeof input !== "object") return false;
     if (input.kind === "volley-pork-state") {
       if (friendVolleyOwnSide() === "p1") return true;
       return applyFriendVolleySnapshot(input.volley);
+    }
+    if (input.kind === "volley-pork-player-state") {
+      const sideKey = input.sideKey === "p2" ? "p2" : "p1";
+      if (sideKey === friendVolleyOwnSide()) return true;
+      applyFriendVolleyFighterSnapshot(sideKey === "p2" ? rival : player, input.volley?.fighter);
+      return true;
     }
     if (input.kind !== "volley-pork-key") return false;
     const sideKey = input.sideKey === "p2" ? "p2" : "p1";
@@ -36967,6 +37058,7 @@ button {
       updateBall(dt);
       updateCollisions();
     }
+    sendFriendVolleyOwnState();
     sendFriendVolleySnapshot();
     if (state.time - state.lastHudSync > 0.045) {
       syncHud();
@@ -37407,7 +37499,7 @@ function gameFriendPlayInjection(){
     'function connect4Input(event){if(config.gameId!=="connect-4")return null;var target=event.target&&event.target.closest&&event.target.closest(".drop-button,.slot");if(!target)return{ignore:true};var col=Number(target.dataset.col);if(!Number.isInteger(col)){var text=target.getAttribute("aria-label")||target.textContent||"";var match=text.match(/column\\s+(\\d+)/i);col=match?Number(match[1])-1:NaN;}if(!Number.isInteger(col)||col<0||col>6)return{ignore:true};if(target.disabled||target.getAttribute("aria-disabled")==="true"||connect4TurnSide()!==String(config.sideKey||""))return{blocked:true};return{kind:"connect4-column",gameId:"connect-4",target:"column",col:col,seq:++seq,at:Date.now()};}',
     'function battleshipInput(event){if(config.gameId!=="battleship")return null;var button=event.target&&event.target.closest&&event.target.closest("button");if(!button)return null;var cell=button.classList&&button.classList.contains("cell")?button:null;if(cell){var row=Number(cell.dataset.row);var col=Number(cell.dataset.col);if(!Number.isInteger(row)||!Number.isInteger(col))return null;if(cell.closest("#enemyGrid"))return{kind:"battleship-shot",gameId:"battleship",row:row,col:col,seq:++seq,at:Date.now()};if(cell.closest("#playerGrid"))return{defer:true,make:function(){var api=window.__friendBattleshipApi;return api?Object.assign({kind:"battleship-fleet",gameId:"battleship",seq:++seq,at:Date.now()},api.ownFleet()):null;}};}if(button.id==="randomButton")return{defer:true,make:function(){var api=window.__friendBattleshipApi;return api?Object.assign({kind:"battleship-fleet",gameId:"battleship",seq:++seq,at:Date.now()},api.ownFleet()):null;}};return null;}',
     'function logicalFromEvent(event){if(config.gameId==="chess"||config.gameId==="checkers")return squareInput(event);if(config.gameId==="mancala")return mancalaInput(event);if(config.gameId==="connect-4")return connect4Input(event);if(config.gameId==="battleship")return battleshipInput(event);return null;}',
-    'function applyLogical(input){if(!input)return false;if(input.kind==="logical-click"){var label=cssEscape(input.label||"");return clickTarget(document.querySelector("#board .square[aria-label=\\""+label+"\\"]"),input);}if(input.kind==="mancala-state"||input.kind==="mancala-pit"){if(window.__friendMancalaApi&&window.__friendMancalaApi.receive)return !!window.__friendMancalaApi.receive(input);if(input.kind==="mancala-pit"){var map=[12,11,10,9,8,7,0,1,2,3,4,5];var pits=Array.prototype.slice.call(document.querySelectorAll("#board .pit"));var pos=map.indexOf(Number(input.pitIndex));return pos>=0?clickTarget(pits[pos],input):false;}return false;}if(input.kind==="connect4-column"){var col=Number(input.col);if(!Number.isInteger(col))return false;return clickTarget(document.querySelector(".drop-button[data-col=\\""+col+"\\"],.slot[data-col=\\""+col+"\\"]"),input);}if((input.kind==="volley-pork-key"||input.kind==="volley-pork-state")&&window.__friendVolleyPorkApi&&window.__friendVolleyPorkApi.receive)return !!window.__friendVolleyPorkApi.receive(input);if(input.kind&&input.kind.indexOf("battleship-")===0&&window.__friendBattleshipApi){window.__friendBattleshipApi.receive(input);return true;}return false;}',
+    'function applyLogical(input){if(!input)return false;if(input.kind==="logical-click"){var label=cssEscape(input.label||"");return clickTarget(document.querySelector("#board .square[aria-label=\\""+label+"\\"]"),input);}if(input.kind==="mancala-state"||input.kind==="mancala-pit"){if(window.__friendMancalaApi&&window.__friendMancalaApi.receive)return !!window.__friendMancalaApi.receive(input);if(input.kind==="mancala-pit"){var map=[12,11,10,9,8,7,0,1,2,3,4,5];var pits=Array.prototype.slice.call(document.querySelectorAll("#board .pit"));var pos=map.indexOf(Number(input.pitIndex));return pos>=0?clickTarget(pits[pos],input):false;}return false;}if(input.kind==="connect4-column"){var col=Number(input.col);if(!Number.isInteger(col))return false;return clickTarget(document.querySelector(".drop-button[data-col=\\""+col+"\\"],.slot[data-col=\\""+col+"\\"]"),input);}if((input.kind==="volley-pork-key"||input.kind==="volley-pork-state"||input.kind==="volley-pork-player-state")&&window.__friendVolleyPorkApi&&window.__friendVolleyPorkApi.receive)return !!window.__friendVolleyPorkApi.receive(input);if(input.kind&&input.kind.indexOf("battleship-")===0&&window.__friendBattleshipApi){window.__friendBattleshipApi.receive(input);return true;}return false;}',
     'function point(input){var cw=Math.max(document.documentElement.clientWidth,window.innerWidth||0);var ch=Math.max(document.documentElement.clientHeight,window.innerHeight||0);var iw=Number(input&&input.width)||cw;var ih=Number(input&&input.height)||ch;return{x:(Number(input&&input.x)||0)*(iw?cw/iw:1),y:(Number(input&&input.y)||0)*(ih?ch/ih:1)};}',
     'function pointTarget(input){var p=point(input);return document.elementFromPoint(p.x,p.y);}',
     'function fire(target,type,input){try{var p=point(input);target.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,clientX:p.x,clientY:p.y,button:Number(input.button)||0,buttons:type==="mouseup"||type==="click"?0:1}));}catch(e){}}',
@@ -37474,6 +37566,7 @@ document.addEventListener('click', function(e){
   const MAX_PROGRESS_MESSAGE_SIZE = 50000;
   const OWNER_ACCOUNT_KEYS = ["vortex", "guinea"];
   const FRIEND_PLAY_GAME_IDS = ["chess", "checkers", "mancala", "battleship", "connect-4", "volley-pork"];
+  const FRIEND_GAME_SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000;
   const HOME_MUSIC_SRC = "";
   const HOME_MUSIC_VOLUME = 0.52;
   // Paste your Supabase Project URL and publishable public key here after running SUPABASE-SETUP.sql.
@@ -37709,6 +37802,7 @@ document.addEventListener('click', function(e){
     activeFriendGameSession: null,
     activeFriendGameMoveIds: new Set(),
     activeFriendGameRoundKey: "",
+    endingFriendGameSessionIds: new Set(),
     friendPlayIframe: null,
     globalChatMessage: "",
     globalChatError: "",
@@ -38312,11 +38406,23 @@ document.addEventListener('click', function(e){
       .filter((request) => request.status === "accepted" && request.sessionId && areFriendsWith(request.requesterKey === identity.key ? request.targetKey : request.requesterKey));
   }
 
+  function isFriendGameSessionExpired(session) {
+    if (!session || session.status !== "active") return false;
+    const rawTime = session.updatedAt || session.createdAt || "";
+    const sessionTime = new Date(rawTime).getTime();
+    return Number.isFinite(sessionTime) && Date.now() - sessionTime > FRIEND_GAME_SESSION_MAX_AGE_MS;
+  }
+
+  function isFriendGameSessionActive(session) {
+    return Boolean(session && session.status === "active" && !isFriendGameSessionExpired(session));
+  }
+
   function relevantFriendGameSessions() {
     const identity = requestIdentity();
     const sessions = readFriendGameSessions().sessions;
-    if (!identity) return sessions;
-    return sessions.filter((session) => session.hostKey === identity.key || session.guestKey === identity.key);
+    const freshSessions = sessions.filter((session) => !isFriendGameSessionExpired(session));
+    if (!identity) return freshSessions;
+    return freshSessions.filter((session) => session.hostKey === identity.key || session.guestKey === identity.key);
   }
 
   function friendGameSessionById(sessionId) {
@@ -38379,7 +38485,7 @@ document.addEventListener('click', function(e){
     const sessionId = activeFriendGameId();
     if (!sessionId) return null;
     const session = friendGameSessionById(sessionId);
-    if (session?.status === "active") {
+    if (isFriendGameSessionActive(session)) {
       if (!state.activeFriendGameSession || state.activeFriendGameSession.id !== session.id) {
         state.activeFriendGameSession = session;
         state.activeFriendGameMoveIds = new Set();
@@ -38506,6 +38612,7 @@ document.addEventListener('click', function(e){
       if (shouldApply) {
         applyPendingFriendGameMoves();
         processFriendPlayAgainState();
+        processFriendGameLeaveState().catch(() => {});
       }
       return;
     }
@@ -38519,6 +38626,7 @@ document.addEventListener('click', function(e){
       if (shouldApply) {
         applyPendingFriendGameMoves();
         processFriendPlayAgainState();
+        processFriendGameLeaveState().catch(() => {});
       }
     } catch {
       state.friendPlayError = "Could not sync friend game moves yet.";
@@ -38793,11 +38901,11 @@ document.addEventListener('click', function(e){
     const identity = requestIdentity();
     if (!identity || !sessionId) return;
     let session = knownSession || friendGameSessionById(sessionId);
-    if ((!session || session.status !== "active") && isSupabaseConfigured()) {
+    if (!isFriendGameSessionActive(session) && isSupabaseConfigured()) {
       await refreshFriendGameSessions(false);
       session = friendGameSessionById(sessionId);
     }
-    if (!session || session.status !== "active" || (session.hostKey !== identity.key && session.guestKey !== identity.key)) {
+    if (!isFriendGameSessionActive(session) || (session.hostKey !== identity.key && session.guestKey !== identity.key)) {
       state.friendPlayError = "That friend game is not active anymore.";
       state.friendPlayMessage = "";
       if (state.authMode === "friend-play") renderAuthModal();
@@ -38820,12 +38928,29 @@ document.addEventListener('click', function(e){
     refreshFriendGameMoves(session.id).catch(() => {});
   }
 
-  function leaveFriendGameSession() {
+  function clearActiveFriendGameSession(sessionId = state.activeFriendGameSession?.id || "") {
+    if (sessionId && state.activeFriendGameSession?.id !== sessionId) return;
     state.activeFriendGameSession = null;
     state.activeFriendGameMoveIds = new Set();
     state.activeFriendGameRoundKey = "";
     rememberActiveFriendGame("");
     configureFriendPlayFrame();
+  }
+
+  async function leaveFriendGameSession() {
+    const session = state.activeFriendGameSession;
+    if (session) {
+      await saveFriendGameSystemEvent({
+        kind: "player-left",
+        gameId: session.gameId,
+        at: Date.now()
+      }, "Could not save that you left the friend game.");
+      if (isSupabaseConfigured()) {
+        await refreshFriendGameMoves(session.id, false).catch(() => {});
+      }
+      await processFriendGameLeaveState(session, friendGameMovesForSession(session.id)).catch(() => {});
+    }
+    clearActiveFriendGameSession(session?.id || "");
     render();
     renderFriendPlayPopups();
   }
@@ -38835,6 +38960,47 @@ document.addEventListener('click', function(e){
     return readFriendGameMoves().moves
       .filter((move) => move.sessionId === sessionId)
       .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+  }
+
+  function friendGameLeaveStatus(session, moves = friendGameMovesForSession(session?.id)) {
+    if (!session) return { hostLeft: false, guestLeft: false, bothLeft: false };
+    const leftKeys = new Set(
+      moves
+        .filter((move) => move.eventPayload?.kind === "player-left")
+        .map((move) => move.playerKey)
+    );
+    const hostLeft = leftKeys.has(session.hostKey);
+    const guestLeft = leftKeys.has(session.guestKey);
+    return { hostLeft, guestLeft, bothLeft: hostLeft && guestLeft };
+  }
+
+  async function endFriendGameSession(session) {
+    if (!session || state.endingFriendGameSessionIds.has(session.id)) return;
+    state.endingFriendGameSessionIds.add(session.id);
+    const now = new Date().toISOString();
+    const endedSession = { ...session, status: "ended", updatedAt: now };
+    addOrReplaceFriendGameSession(endedSession);
+    if (isSupabaseConfigured()) {
+      try {
+        await supabaseFetch("friend_game_sessions", {
+          method: "PATCH",
+          query: `?id=eq.${encodeURIComponent(session.id)}`,
+          body: { status: "ended", updated_at: now },
+          prefer: "return=representation"
+        });
+      } catch {
+        state.friendPlayError = "Could not reset that old friend game yet.";
+      }
+    }
+    clearActiveFriendGameSession(session.id);
+    state.endingFriendGameSessionIds.delete(session.id);
+  }
+
+  async function processFriendGameLeaveState(session = state.activeFriendGameSession, moves = friendGameMovesForSession(session?.id)) {
+    if (!session || session.status !== "active") return;
+    if (isFriendGameSessionExpired(session) || friendGameLeaveStatus(session, moves).bothLeft) {
+      await endFriendGameSession(session);
+    }
   }
 
   function friendPlayRoundInfo(session = state.activeFriendGameSession, moves = friendGameMovesForSession(session?.id)) {
@@ -39036,7 +39202,7 @@ document.addEventListener('click', function(e){
     if (!iframe?.contentWindow || !game) return;
     const identity = requestIdentity();
     const session = state.activeFriendGameSession;
-    const enabled = Boolean(identity && session && session.status === "active" && session.gameId === game.id && isFriendPlayGame(game.id));
+    const enabled = Boolean(identity && isFriendGameSessionActive(session) && session.gameId === game.id && isFriendPlayGame(game.id));
     const opponent = enabled ? friendGameOpponent(session) : null;
     iframe.contentWindow.postMessage({
       type: "ai-platform-friend-play-config",
@@ -39068,7 +39234,7 @@ document.addEventListener('click', function(e){
       .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
       .forEach((move) => {
         if (state.activeFriendGameMoveIds.has(move.id)) return;
-        if (move.eventPayload?.kind === "play-again-vote" || move.eventPayload?.kind === "play-again-reset") {
+        if (move.eventPayload?.kind === "play-again-vote" || move.eventPayload?.kind === "play-again-reset" || move.eventPayload?.kind === "player-left") {
           state.activeFriendGameMoveIds.add(move.id);
           return;
         }
@@ -39101,7 +39267,7 @@ document.addEventListener('click', function(e){
     const incoming = incomingFriendGameRequests().slice(0, 3);
     const accepted = acceptedFriendGameRequests()
       .map((request) => ({ request, session: friendGameSessionById(request.sessionId) }))
-      .filter(({ session }) => session?.status === "active" && session.id !== activeSessionId)
+      .filter(({ session }) => isFriendGameSessionActive(session) && session.id !== activeSessionId)
       .slice(0, 2);
     if (!incoming.length && !accepted.length) return "";
     return `
@@ -40358,7 +40524,7 @@ document.addEventListener('click', function(e){
       `;
     }
     const friends = friendEntries();
-    const sessions = relevantFriendGameSessions().filter((session) => session.status === "active").slice(0, 6);
+    const sessions = relevantFriendGameSessions().filter(isFriendGameSessionActive).slice(0, 6);
     return `
       <div class="friend-play-board">
         <div class="friend-play-toolbar">
@@ -40404,7 +40570,7 @@ document.addEventListener('click', function(e){
 
   function friendPlaySessionHtml(game) {
     const session = state.activeFriendGameSession;
-    if (!session || session.status !== "active" || session.gameId !== game.id) return "";
+    if (!isFriendGameSessionActive(session) || session.gameId !== game.id) return "";
     const opponent = friendGameOpponent(session);
     const rematch = friendPlayAgainStatus(session);
     return `
@@ -40883,7 +41049,9 @@ document.addEventListener('click', function(e){
     });
 
     root.querySelectorAll("[data-friend-play-leave]").forEach((button) => {
-      button.addEventListener("click", leaveFriendGameSession);
+      button.addEventListener("click", () => {
+        leaveFriendGameSession().catch(() => {});
+      });
     });
 
     root.querySelectorAll("[data-global-chat-profile]").forEach((button) => {
@@ -42120,8 +42288,11 @@ document.addEventListener('click', function(e){
   }
 
   function renderPlayer(game) {
+    const useFriendFullscreen = game.id === "volley-pork"
+      && isFriendGameSessionActive(state.activeFriendGameSession)
+      && state.activeFriendGameSession.gameId === game.id;
     app.innerHTML = `
-      <section class="player-page">
+      <section class="player-page${useFriendFullscreen ? " is-friend-fullscreen" : ""}">
         <div class="player-head">
           <div>
             <a class="back-link" href="#/game/${game.id}">Back to summary</a>
@@ -42154,6 +42325,7 @@ document.addEventListener('click', function(e){
             title="${escapeHtml(game.title)}"
             data-game="${escapeHtml(game.id)}"
             allow="autoplay; fullscreen; gamepad"
+            allowfullscreen
             sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock allow-popups"></iframe>
         </div>
       </section>
@@ -42419,7 +42591,7 @@ document.addEventListener('click', function(e){
     const leaveButton = event.target?.closest?.("[data-friend-play-leave]");
     if (leaveButton) {
       event.preventDefault();
-      leaveFriendGameSession();
+      leaveFriendGameSession().catch(() => {});
       return;
     }
     const playAgainButton = event.target?.closest?.("[data-friend-play-again]");
@@ -42467,7 +42639,7 @@ document.addEventListener('click', function(e){
     if (state.activeFriendGameSession) {
       refreshFriendGameMoves(state.activeFriendGameSession.id).catch(() => {});
     }
-  }, 650);
+  }, 250);
 })();
 
 </script>
