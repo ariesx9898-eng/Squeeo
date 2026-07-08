@@ -36300,12 +36300,13 @@ button {
 
   function setFriendVolleyMode(config = {}) {
     friendVolley.enabled = Boolean(config.enabled);
-    friendVolley.sideKey = config.sideKey === "p2" ? "p2" : "p1";
+    friendVolley.sideKey = config.isHost === true ? "p1" : config.sideKey === "p2" ? "p2" : "p1";
     friendVolley.remoteKeys.clear();
     pointer.active = false;
     pointer.targetX = null;
     if (friendVolley.enabled) {
       setVolleyMode("two");
+      rival.ai = false;
       if (modeToggle) {
         modeToggle.disabled = true;
         modeToggle.style.display = "none";
@@ -36897,6 +36898,8 @@ button {
 
   function update(dt) {
     updateEffects(dt);
+    if (friendVolley.enabled && state.mode !== "two") setVolleyMode("two");
+    if (friendVolley.enabled) rival.ai = false;
     if (state.pointTimer <= 0) {
       for (const fighter of fighters) updateFighter(fighter, dt);
       updateBall(dt);
@@ -38262,6 +38265,11 @@ document.addEventListener('click', function(e){
   }
 
   function friendPlaySideKey(gameId, session = state.activeFriendGameSession) {
+    const identity = requestIdentity();
+    if (gameId === "volley-pork") {
+      if (identity && session?.hostKey === identity.key) return "p1";
+      if (identity && session?.guestKey === identity.key) return "p2";
+    }
     const role = friendPlayRole(session);
     const isPlayerTwo = role === "Player 2";
     if (gameId === "chess") return isPlayerTwo ? "b" : "w";
@@ -38957,6 +38965,11 @@ document.addEventListener('click', function(e){
         gameId: game.id,
         playerKey: identity?.key || "",
         username: identity?.username || "",
+        hostKey: enabled ? session.hostKey : "",
+        guestKey: enabled ? session.guestKey : "",
+        hostUsername: enabled ? session.hostUsername : "",
+        guestUsername: enabled ? session.guestUsername : "",
+        isHost: Boolean(enabled && identity?.key === session.hostKey),
         role: enabled ? friendPlayRole(session) : "",
         sideKey: enabled ? friendPlaySideKey(game.id, session) : "",
         opponentUsername: opponent?.username || ""
