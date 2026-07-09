@@ -11520,6 +11520,7 @@ init();
 </div>
 
 <audio id="bgm" loop preload="auto">
+  <source src="assets/platform-asset-01-audio.mp3" type="audio/mpeg">
 </audio>
 
 <script>
@@ -18508,8 +18509,8 @@ button:hover {
   <\/script>
   <script>
 window.__DJ_TRACK_SOURCES = {
-  moms: "",
-  playtime: ""
+  moms: "assets/platform-asset-02-audio.mp3",
+  playtime: "assets/platform-asset-03-audio.mp3"
 };
   <\/script>
   <script>
@@ -35763,6 +35764,8 @@ button {
     Digit3: "dribble",
     Digit4: "smash"
   };
+  const FRIEND_VOLLEY_WORLD_STATE_MS = 160;
+  const FRIEND_VOLLEY_PLAYER_STATE_MS = 95;
   const FRIEND_KEY_TO_CODE = {
     "1": "Digit1",
     "2": "Digit2",
@@ -36247,6 +36250,7 @@ button {
       code,
       sideKey,
       down: Boolean(down),
+      movement: P1_MOVE_KEYS.includes(code) || P2_MOVE_KEYS.includes(code),
       repeat: Boolean(event.repeat),
       seq: ++friendVolley.seq,
       at: Date.now()
@@ -36263,6 +36267,7 @@ button {
 
   function friendVolleyFighterSnapshot(fighter) {
     return {
+      at: Date.now(),
       x: fighter.x,
       y: fighter.y,
       vx: fighter.vx,
@@ -36283,12 +36288,27 @@ button {
     return friendVolleyOwnSide() === "p2" ? rival : player;
   }
 
+  function friendVolleySideForFighter(fighter) {
+    return fighter === rival ? "p2" : "p1";
+  }
+
+  function friendVolleyIsRemoteFighter(fighter) {
+    return friendVolley.enabled && friendVolleySideForFighter(fighter) !== friendVolleyOwnSide();
+  }
+
   function applyFriendVolleyFighterSnapshot(fighter, snapshot) {
     if (!snapshot || typeof snapshot !== "object") return;
-    fighter.x = friendVolleyNumber(snapshot.x, fighter.x);
-    fighter.y = friendVolleyNumber(snapshot.y, fighter.y);
-    fighter.vx = friendVolleyNumber(snapshot.vx, fighter.vx);
-    fighter.vy = friendVolleyNumber(snapshot.vy, fighter.vy);
+    const sampleAge = clamp((Date.now() - friendVolleyNumber(snapshot.at, Date.now())) / 1000, 0, 0.16);
+    const nextVx = friendVolleyNumber(snapshot.vx, fighter.vx);
+    const nextVy = friendVolleyNumber(snapshot.vy, fighter.vy);
+    const nextX = friendVolleyNumber(snapshot.x, fighter.x) + nextVx * sampleAge;
+    const nextY = friendVolleyNumber(snapshot.y, fighter.y) + (snapshot.onGround ? 0 : nextVy * sampleAge + GRAVITY * 0.55 * sampleAge * sampleAge);
+    const snap = Math.abs(fighter.x - nextX) > 220 || Math.abs(fighter.y - nextY) > 180;
+    const blend = snap ? 1 : 0.64;
+    fighter.x = lerp(fighter.x, nextX, blend);
+    fighter.y = lerp(fighter.y, nextY, blend);
+    fighter.vx = nextVx;
+    fighter.vy = nextVy;
     fighter.targetX = friendVolleyNumber(snapshot.targetX, fighter.targetX);
     fighter.onGround = Boolean(snapshot.onGround);
     fighter.action = typeof snapshot.action === "string" ? snapshot.action : fighter.action;
@@ -36302,6 +36322,7 @@ button {
 
   function friendVolleySnapshot() {
     return {
+      at: Date.now(),
       scores: state.scores.slice(0, 2),
       rally: state.rally,
       combo: state.combo,
@@ -36351,10 +36372,17 @@ button {
     if (ownSide !== "p1") applyFriendVolleyFighterSnapshot(player, snapshot.player);
     if (ownSide !== "p2") applyFriendVolleyFighterSnapshot(rival, snapshot.rival);
     if (snapshot.ball && typeof snapshot.ball === "object") {
-      ball.x = friendVolleyNumber(snapshot.ball.x, ball.x);
-      ball.y = friendVolleyNumber(snapshot.ball.y, ball.y);
-      ball.vx = friendVolleyNumber(snapshot.ball.vx, ball.vx);
-      ball.vy = friendVolleyNumber(snapshot.ball.vy, ball.vy);
+      const sampleAge = clamp((Date.now() - friendVolleyNumber(snapshot.at, Date.now())) / 1000, 0, 0.16);
+      const nextVx = friendVolleyNumber(snapshot.ball.vx, ball.vx);
+      const nextVy = friendVolleyNumber(snapshot.ball.vy, ball.vy);
+      const nextX = friendVolleyNumber(snapshot.ball.x, ball.x) + nextVx * sampleAge;
+      const nextY = friendVolleyNumber(snapshot.ball.y, ball.y) + nextVy * sampleAge + GRAVITY * 0.5 * sampleAge * sampleAge;
+      const snap = Math.hypot(ball.x - nextX, ball.y - nextY) > 260 || state.pointTimer > 0 || ball.frozen;
+      const blend = snap ? 1 : 0.58;
+      ball.x = lerp(ball.x, nextX, blend);
+      ball.y = lerp(ball.y, nextY, blend);
+      ball.vx = nextVx;
+      ball.vy = nextVy;
       ball.r = friendVolleyNumber(snapshot.ball.r, ball.r);
       ball.spin = friendVolleyNumber(snapshot.ball.spin, ball.spin);
       ball.angle = friendVolleyNumber(snapshot.ball.angle, ball.angle);
@@ -36373,7 +36401,7 @@ button {
   function sendFriendVolleySnapshot() {
     if (!friendVolley.enabled || friendVolleyOwnSide() !== "p1") return;
     const now = Date.now();
-    if (now - friendVolley.lastSnapshotAt < 260) return;
+    if (now - friendVolley.lastSnapshotAt < FRIEND_VOLLEY_WORLD_STATE_MS) return;
     friendVolley.lastSnapshotAt = now;
     try {
       window.parent?.postMessage({
@@ -36393,10 +36421,10 @@ button {
     }
   }
 
-  function sendFriendVolleyOwnState() {
+  function sendFriendVolleyOwnState(force = false) {
     if (!friendVolley.enabled) return;
     const now = Date.now();
-    if (now - friendVolley.lastOwnStateAt < 180) return;
+    if (!force && now - friendVolley.lastOwnStateAt < FRIEND_VOLLEY_PLAYER_STATE_MS) return;
     friendVolley.lastOwnStateAt = now;
     try {
       window.parent?.postMessage({
@@ -36465,7 +36493,7 @@ button {
         modeToggle.style.display = "none";
       }
       const touchRail = document.querySelector(".touch-rail");
-      if (touchRail) touchRail.style.display = friendVolleyOwnSide() === "p2" ? "none" : "";
+      if (touchRail) touchRail.style.display = "";
       pulseHud(friendVolleyOwnSide() === "p2" ? "FRIEND P2" : "FRIEND P1");
     } else {
       if (modeToggle) {
@@ -36497,7 +36525,9 @@ button {
     if (fighter.stageTimer <= 0) fighter.comboStage = "";
     if (fighter.recentDribble <= 0) fighter.dribbleCount = Math.max(0, fighter.dribbleCount - 1);
 
-    if (fighter.ai) {
+    if (friendVolleyIsRemoteFighter(fighter)) {
+      // Remote friend movement comes from synced snapshots, not local input guesses.
+    } else if (fighter.ai) {
       updateAiIntent(fighter, dt);
     } else if (fighter === rival) {
       updatePlayerTwoIntent(fighter);
@@ -36536,7 +36566,7 @@ button {
       if ((useArrowKeys && keys.has("ArrowRight")) || keys.has("KeyD")) move += 1;
     }
 
-    if (!friendVolley.enabled && pointer.active && pointer.targetX !== null) {
+    if ((!friendVolley.enabled || friendVolleyOwnSide() === "p1") && pointer.active && pointer.targetX !== null) {
       fighter.targetX = pointer.targetX;
     } else if (move !== 0) {
       fighter.targetX = fighter.x + move * 70;
@@ -36560,7 +36590,9 @@ button {
     if (volleyKeyDown("ArrowLeft", "p2")) move -= 1;
     if (volleyKeyDown("ArrowRight", "p2")) move += 1;
 
-    if (move !== 0) {
+    if (friendVolley.enabled && friendVolleyOwnSide() === "p2" && pointer.active && pointer.targetX !== null) {
+      fighter.targetX = pointer.targetX;
+    } else if (move !== 0) {
       fighter.targetX = fighter.x + move * 70;
     } else {
       fighter.targetX = lerp(fighter.targetX, fighter.x, 0.18);
@@ -36572,6 +36604,11 @@ button {
       fighter.squash = 0.5;
       sound("hit", 0.25);
     }
+  }
+
+  function friendVolleyPointerCanControl(x) {
+    if (!friendVolley.enabled) return x < COURT.mid;
+    return friendVolleyOwnSide() === "p2" ? x > COURT.mid : x < COURT.mid;
   }
 
   function updateAiIntent(fighter, dt) {
@@ -37362,6 +37399,7 @@ button {
         if (action) {
           if (ownSide === "p2") triggerAction(rival, action, false);
           else triggerPlayerAction(action);
+          sendFriendVolleyOwnState(true);
         }
       }
       unlockAudio();
@@ -37395,14 +37433,17 @@ button {
     pointer.active = true;
     pointer.x = event.clientX;
     pointer.y = event.clientY;
-    if (event.clientX < COURT.mid) pointer.targetX = event.clientX;
+    if (friendVolleyPointerCanControl(event.clientX)) pointer.targetX = event.clientX;
     canvas.setPointerCapture(event.pointerId);
   });
 
   canvas.addEventListener("pointermove", (event) => {
     pointer.x = event.clientX;
     pointer.y = event.clientY;
-    if (pointer.active && event.clientX < COURT.mid) pointer.targetX = event.clientX;
+    if (pointer.active && friendVolleyPointerCanControl(event.clientX)) {
+      pointer.targetX = event.clientX;
+      sendFriendVolleyOwnState();
+    }
   });
 
   canvas.addEventListener("pointerup", (event) => {
@@ -37418,7 +37459,12 @@ button {
   document.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("pointerdown", (event) => {
       event.preventDefault();
-      triggerPlayerAction(button.dataset.action);
+      if (friendVolley.enabled && friendVolleyOwnSide() === "p2") {
+        triggerAction(rival, button.dataset.action, true);
+      } else {
+        triggerPlayerAction(button.dataset.action);
+      }
+      sendFriendVolleyOwnState(true);
     });
   });
 
@@ -37567,7 +37613,7 @@ document.addEventListener('click', function(e){
   const OWNER_ACCOUNT_KEYS = ["vortex", "guinea"];
   const FRIEND_PLAY_GAME_IDS = ["chess", "checkers", "mancala", "battleship", "connect-4", "volley-pork"];
   const FRIEND_GAME_SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000;
-  const HOME_MUSIC_SRC = "";
+  const HOME_MUSIC_SRC = "assets/platform-asset-04-audio.mp3";
   const HOME_MUSIC_VOLUME = 0.52;
   // Paste your Supabase Project URL and publishable public key here after running SUPABASE-SETUP.sql.
   const SUPABASE_URL = "https://aecapjtiwdofuotdhncm.supabase.co";
@@ -37793,6 +37839,7 @@ document.addEventListener('click', function(e){
     friendsLoading: false,
     messagesLoading: false,
     friendPlayLoading: false,
+    friendGameMovesSyncing: false,
     globalChatLoading: false,
     friendInboxOpen: false,
     activeFriendKey: "",
@@ -38616,6 +38663,8 @@ document.addEventListener('click', function(e){
       }
       return;
     }
+    if (state.friendGameMovesSyncing) return;
+    state.friendGameMovesSyncing = true;
     try {
       const rows = await supabaseFetch("friend_game_moves", {
         query: `?select=id,session_id,player_key,player_username,event_payload,created_at&session_id=eq.${encodeURIComponent(sessionId)}&order=created_at.asc&limit=1000`
@@ -38630,6 +38679,8 @@ document.addEventListener('click', function(e){
       }
     } catch {
       state.friendPlayError = "Could not sync friend game moves yet.";
+    } finally {
+      state.friendGameMovesSyncing = false;
     }
   }
 
@@ -39140,6 +39191,7 @@ document.addEventListener('click', function(e){
     const session = state.activeFriendGameSession;
     if (!identity || !session || !input || typeof input !== "object") return;
     if (!isFriendPlayGame(session.gameId)) return;
+    if (session.gameId === "volley-pork" && input.kind === "volley-pork-key" && (input.movement || input.repeat || input.down === false)) return;
     const rawBattleship = input.battleship && typeof input.battleship === "object" ? input.battleship : {};
     const rawVolley = input.volley && typeof input.volley === "object" ? input.volley : {};
     const eventPayload = {
@@ -39160,6 +39212,7 @@ document.addEventListener('click', function(e){
     if (input.action) eventPayload.action = String(input.action).slice(0, 30);
     if (input.sideKey) eventPayload.sideKey = String(input.sideKey).slice(0, 10);
     if (typeof input.down === "boolean") eventPayload.down = input.down;
+    if (typeof input.movement === "boolean") eventPayload.movement = input.movement;
     if (typeof input.repeat === "boolean") eventPayload.repeat = input.repeat;
     if (Number.isInteger(Number(input.pitIndex))) eventPayload.pitIndex = Number(input.pitIndex);
     if (Number.isInteger(Number(input.row))) eventPayload.row = Number(input.row);
@@ -42627,19 +42680,23 @@ document.addEventListener('click', function(e){
     const typingGlobalMessage = Boolean(document.activeElement?.closest?.("#globalChatForm"));
     refreshGlobalChatMessages(state.authMode === "global-chat" && !typingGlobalMessage).catch(() => {});
   }, 15000);
-  let friendGameSyncAt = 0;
+  let friendGameMetadataSyncAt = 0;
+  let friendGameMoveSyncAt = 0;
   window.setInterval(() => {
     if (!state.user) return;
     const fastVolley = state.activeFriendGameSession?.gameId === "volley-pork";
     const now = Date.now();
-    if (!fastVolley && now - friendGameSyncAt < 2500) return;
-    friendGameSyncAt = now;
-    refreshFriendGameRequests(false).catch(() => {});
-    refreshFriendGameSessions(false).catch(() => {});
-    if (state.activeFriendGameSession) {
+    if (now - friendGameMetadataSyncAt >= 2500) {
+      friendGameMetadataSyncAt = now;
+      refreshFriendGameRequests(false).catch(() => {});
+      refreshFriendGameSessions(false).catch(() => {});
+    }
+    const moveInterval = fastVolley ? 150 : 2500;
+    if (state.activeFriendGameSession && now - friendGameMoveSyncAt >= moveInterval) {
+      friendGameMoveSyncAt = now;
       refreshFriendGameMoves(state.activeFriendGameSession.id).catch(() => {});
     }
-  }, 250);
+  }, 100);
 })();
 
 </script>
